@@ -1,4 +1,4 @@
-import os 
+import os
 import time
 from datetime import datetime
 
@@ -10,10 +10,11 @@ from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 import wandb
 
+
 class Trainer:
     def __init__(
-        self, 
-        model, 
+        self,
+        model,
         text_train_loader,
         image_caption_train_loader,
         text_val_loader=None,
@@ -28,57 +29,56 @@ class Trainer:
         checkpoint_dir="checkpoints",
         device="cuda",
         clip_grad_norm=1.0,
-        eval_steps=10000,
+        eval_steps=1000,
         checkpoint_steps=20000,
         early_stopping_patience=5,
         wandb_project="dual-stream-model",
         wandb_run_name=None,
         wandb_config=None
-    )
+    ):
 
-    self.model = model
-    self.text_train_loader = text_train_loader
-    self.image_caption_train_loader = image_caption_train_loader
+        self.model = model
+        self.text_train_loader = text_train_loader
+        self.image_caption_train_loader = image_caption_train_loader
 
-    self.text_val_loader = text_val_loader
-    self.image_caption_val_loader = image_caption_val_loader
-    
-    self.text_test_loader = text_test_loader
-    self.image_caption_test_loader = image_caption_test_loader
+        self.text_val_loader = text_val_loader
+        self.image_caption_val_loader = image_caption_val_loader
 
-    self.device = device
-    self.model.to(device)
+        self.text_test_loader = text_test_loader
+        self.image_caption_test_loader = image_caption_test_loader
 
-    self.text_only_epochs = text_only_epochs
-    self.image_caption_epochs = image_caption_epochs
-    self.max_epochs = text_only_epochs + image_caption_epochs
+        self.device = device
+        self.model.to(device)
 
-    self.optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1e-8)
+        self.text_only_epochs = text_only_epochs
+        self.image_caption_epochs = image_caption_epochs
+        self.max_epochs = text_only_epochs + image_caption_epochs
 
-    self.scheduler = CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=1e-7)
+        self.optimizer = AdamW(self.model.parameters(
+        ), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1e-8)
 
-    self.scaler = GradScaler()
+        self.scheduler = CosineAnnealingLR(
+            self.optimizer, T_max=total_steps, eta_min=1e-7)
 
-    self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
+        self.scaler = GradScaler()
 
-    self.max_epochs = max_epochs
-    self.total_steps = total_steps
-    self.clip_grad_norm = clip_grad_norm
-    self.eval_steps = eval_steps
-    self.checkpoint_steps = checkpoint_steps
-    self.early_stopping_patience = early_stopping_patience
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    self.checkpoint_dir = checkpoint_dir
+        self.total_steps = total_steps
+        self.clip_grad_norm = clip_grad_norm
+        self.eval_steps = eval_steps
+        self.checkpoint_steps = checkpoint_steps
+        self.early_stopping_patience = early_stopping_patience
 
-    self._setup_wandb(wandb_project, wandb_run_name, wandb_config)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self.checkpoint_dir = checkpoint_dir
 
-    # logs
-    self.global_step = 0
-    self.best_val_loss = float("inf")
-    self.patience_counter = 0
+        self._setup_wandb(wandb_project, wandb_run_name, wandb_config)
 
-
+        # logs
+        self.global_step = 0
+        self.best_val_loss = float("inf")
+        self.patience_counter = 0
 
     def _setup_wandb(self, project, run_name, config):
         if run_name is None:
@@ -100,14 +100,14 @@ class Trainer:
         text_mask = batch.get("text_mask", None)
         if text_mask is not None:
             text_mask = text_mask.to(self.device)
-        
+
         dino_embedding = batch.get("dino_embedding", None)
         if dino_embedding is not None:
             dino_embedding = dino_embedding.to(self.device)
-            
+
         return text_input, text_mask, dino_embedding
 
-     def _prepare_inputs_targets(self, input_ids, attention_mask):
+    def _prepare_inputs_targets(self, input_ids, attention_mask):
         inputs = input_ids[:, :-1].contiguous()
         targets = input_ids[:, 1:].contiguous()
 
@@ -129,7 +129,7 @@ class Trainer:
         self.optimizer.zero_grad()
 
         with autocast():
-            ouputs = self.model(text_input=inputs, dino_embedding=dino_embedding, tgt=targets, text_padding_mask=(input_mask == 0) if input_mask is not None else None, use_image=use_image)
+            outputs = self.model(text_input=inputs, dino_embedding=dino_embedding, tgt=targets, text_padding_mask=(input_mask == 0) if input_mask is not None else None, use_image=use_image)
             loss = self._compute_loss(outputs, targets)
     
         self.scaler.scale(loss).backward()
