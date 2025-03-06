@@ -99,6 +99,51 @@ class DualStreamTransformer(nn.Module):
 
     return output
 
+    def generate(self, text_input, dino_embedding=None, max_len=50, temperature=1.0, BOS_TOKEN_ID=101, EOS_TOKEN_ID=102, text_attention_mask=None, use_image=False):
+        self.eval()
+
+        device = text_input.device
+        batch_size = text_input.size(0)
+
+        # Encode Text Input
+        text_embedded = self.text_embedding(text_input, attention_mask=text_attention_mask)
+        text_encoded = self.text_encoder(text_embedded, src_key_padding_mask=None)
+
+        # Encode Image Input
+        if use_image and dino_embedding is not None:
+            image_embedded = self.image_embedding(dino_embedding)
+            image_encoded = self.image_encoder(image_embedded, src_key_padding_mask=None)
+        else:
+            image_encoded = None
+
+        for _ in range(max_len - 1):
+        
+            tgt_embedded = self.text_embedding(generated, attention_mask=None)
+            tgt_len = tgt_embedded.size(0) # [tgt_seq_len, batch, d_model]
+            
+            # Causal mask
+            tgt_mask = self.decoder.generate_square_subsequent_mask(tgt_len).to(device)
+            
+            # Decoder pass
+            decoder_output = self.decoder(tgt_embedded, text_encoded, image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=None, text_memory_key_padding_mask=None, image_memory_key_padding_mask=None)
+            
+            last_output = decoder_output[-1]  #[batch, d_model]
+            logits = self.output_layer(last_output)  # [batch, vocab_size]
+            logits = logits / temperature
+            probs = torch.softmax(logits, dim=-1)
+            
+            # Sample the next token
+            next_token = torch.multinomial(probs, num_samples=1)  #  [batch, 1]
+            generated = torch.cat([generated, next_token], dim=1)
+            
+            # If all sequences have generated EOS, stop early
+            if (next_token == EOS_TOKEN_ID).all():
+                break
+
+        self.train()
+        return generated
+
+        
 
 class BertTextEmbedding(nn.Module):
     def __init__(self, bert_model_name="bert-base-uncased"):
