@@ -29,7 +29,7 @@ class Trainer:
         checkpoint_dir="checkpoints",
         device="cuda",
         clip_grad_norm=1.0,
-        eval_steps=1000,
+        eval_steps=10000,
         checkpoint_steps=20000,
         early_stopping_patience=5,
         wandb_project="dual-stream-model",
@@ -211,7 +211,7 @@ class Trainer:
             self.evaluate_loader(self.text_test_loader, use_image=False, prefix="test/text")
         elif train_use_image and self.image_caption_test_loader is not None:
             self.evaluate_loader(self.image_caption_test_loader, use_image=True, prefix="test/image_caption")
-
+        self.save_checkpoint(epoch=self.max_epochs - 1, is_best=False)
         total_time = time.time() - start_time
         print(f"Training completed in {total_time:.2f}s")
         wandb.finish()

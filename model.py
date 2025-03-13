@@ -33,7 +33,8 @@ class DualStreamTransformer(nn.Module):
         self.d_model = d_model
 
         # Embedding layers
-        self.text_embedding = BertTextEmbedding(bert_model_name)
+        # self.text_embedding = BertTextEmbedding(bert_model_name)
+        self.text_embedding = SimpleTextEmbedding(vocab_size, d_model)
         self.image_embedding = DinoImageEmbedding()
 
         # Dual-stream encoders
@@ -78,7 +79,7 @@ class DualStreamTransformer(nn.Module):
 
         # Text Embedding + Encoding
         text_embedded = self.text_embedding(
-            text_input, attention_mask=text_attention_mask)
+            text_input)
         text_encoded = self.text_encoder(
             text_embedded, src_key_padding_mask=text_padding_mask)
 
@@ -91,7 +92,7 @@ class DualStreamTransformer(nn.Module):
             image_encoded = None
 
         # Target embedding for decode using text embeddings
-        tgt_embedded = self.text_embedding(tgt, attention_mask=None)
+        tgt_embedded = self.text_embedding(tgt)
         tgt_len = tgt_embedded.size(0)
 
         # Causal mask for decoder
@@ -114,7 +115,7 @@ class DualStreamTransformer(nn.Module):
 
         # Encode Text Input
         text_embedded = self.text_embedding(
-            text_input, attention_mask=text_attention_mask)
+            text_input)
         text_encoded = self.text_encoder(
             text_embedded, src_key_padding_mask=None)
 
@@ -128,7 +129,7 @@ class DualStreamTransformer(nn.Module):
 
         for _ in range(max_len - 1):
 
-            tgt_embedded = self.text_embedding(generated, attention_mask=None)
+            tgt_embedded = self.text_embedding(generated)
             tgt_len = tgt_embedded.size(0)  # [tgt_seq_len, batch, d_model]
 
             # Causal mask
@@ -155,6 +156,27 @@ class DualStreamTransformer(nn.Module):
         self.train()
         return generated
 
+class SimpleTextEmbedding(nn.Module):
+    def __init__(self, vocab_size, d_model, max_len=64, dropout=0.1):
+        super().__init__()
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.position_embedding = nn.Embedding(max_len, d_model)
+        self.dropout = nn.Dropout(p=0.1)
+        self.d_model = d_model
+
+    def forward(self, x):
+        batch_size, seq_len = x.size()
+
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
+        
+        token_emb = self.token_embedding(x)
+        pos_emb = self.position_embedding(positions)
+
+        embeddings = (token_emb + pos_emb) * math.sqrt(self.d_model)
+
+        embeddings = self.dropout(embeddings)
+        
+        return embeddings.transpose(0, 1) 
 
 class BertTextEmbedding(nn.Module):
     def __init__(self, bert_model_name="bert-base-uncased"):

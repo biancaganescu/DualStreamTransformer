@@ -3,7 +3,7 @@ import numpy as np
 import os
 def load_and_concatenate_dino_data():
     caption_files = ["./data/image_caption/cc_3M_captions.json", "./data/image_caption/local_narr_captions.json"]
-
+    # caption_files = ["./data/image_caption/local_narr_captions.json"]
     all_captions = []
     for caption_file in caption_files:
         with open(caption_file, "r") as f:
@@ -11,7 +11,7 @@ def load_and_concatenate_dino_data():
         all_captions.extend(captions)
     
     processed_embeddings = np.load("./data/image_caption/processed_embeddings.npy")
-
+    # processed_embeddings = np.load("./data/image_caption/local_narr_dino_v2_states.npy")
     processed_embeddings = processed_embeddings / (np.linalg.norm(processed_embeddings, axis=1, keepdims=True) + 1e-8)
 
     assert len(all_captions) == processed_embeddings.shape[0], (

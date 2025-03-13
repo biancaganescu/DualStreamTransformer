@@ -43,8 +43,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs (text-only + image-caption)")
     parser.add_argument("--total-steps", type=int, default=100000, help="Total training steps")
-    parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
-    parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
+    parser.add_argument("--text-only-epochs", type=int, default=1, help="Epochs to train on text-only data")
+    parser.add_argument("--image-caption-epochs", type=int, default=1, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
@@ -90,10 +90,11 @@ if __name__ == "__main__":
         dino_dim=768,
         dropout=0.1
     )
-    # if torch.cuda.device_count() > 1:
-    #     print(f"Using {torch.cuda.device_count()} GPUs")
-    #     model = torch.nn.DataParallel(model)
+
+
     model = model.to(args.device)
+
+
     print(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -116,6 +117,7 @@ if __name__ == "__main__":
         checkpoint_dir=checkpoint_dir,
         device=args.device,
         clip_grad_norm=args.clip_grad_norm,
+        eval_steps=10000,
         wandb_project="dual-stream-model",
         wandb_run_name=f"dual_stream_{timestamp}"
     )
