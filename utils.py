@@ -10,6 +10,12 @@ def load_and_concatenate_dino_data():
             captions = json.load(f)
         all_captions.extend(captions)
     
+    max_string = max(all_captions, key=lambda s: len(s.split()))
+    max_word_count = len(max_string.split())
+
+    # Print the result
+    print("String with maximum words:", max_string)
+    print("Maximum number of words:", max_word_count)
     processed_embeddings = np.load("./data/image_caption/processed_embeddings.npy")
     # processed_embeddings = np.load("./data/image_caption/local_narr_dino_v2_states.npy")
     processed_embeddings = processed_embeddings / (np.linalg.norm(processed_embeddings, axis=1, keepdims=True) + 1e-8)
@@ -34,6 +40,6 @@ def load_and_concatenate_text_only_data(directory):
                 all_texts.extend(lines)
     
     print("all texts snippet ", all_texts[:5])
-    return all_texts
+    return all_texts[:100]
 
 

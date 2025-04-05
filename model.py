@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as functional
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import math
-from transformers import BertModel
+# from transformers import BertModel
 
 
 class DualStreamTransformer(nn.Module):
@@ -19,7 +19,6 @@ class DualStreamTransformer(nn.Module):
     def __init__(
         self,
         vocab_size: int,
-        bert_model_name: str = "bert-base-uncased",
         d_model: int = 768,
         n_head: int = 6,
         d_hid: int = 768,
@@ -45,7 +44,7 @@ class DualStreamTransformer(nn.Module):
 
         # Decoder
         self.decoder = MultimodalDecoder(
-            d_model, n_head, d_hid, num_encoder_layers, dropout)
+            d_model, n_head, d_hid, num_decoder_layers, dropout)
 
         # Output layer
         self.output_layer = nn.Linear(d_model, vocab_size)
@@ -109,52 +108,84 @@ class DualStreamTransformer(nn.Module):
 
     def generate(self, text_input, dino_embedding=None, max_len=50, temperature=1.0, BOS_TOKEN_ID=101, EOS_TOKEN_ID=102, text_attention_mask=None, use_image=False):
         self.eval()
-
         device = text_input.device
         batch_size = text_input.size(0)
-
+        
+        # Initialize the generated sequence with BOS token
+        generated = torch.LongTensor([[BOS_TOKEN_ID]] * batch_size).to(device)
+        
         # Encode Text Input
-        text_embedded = self.text_embedding(
-            text_input)
-        text_encoded = self.text_encoder(
-            text_embedded, src_key_padding_mask=None)
-
+        text_embedded = self.text_embedding(text_input)  # This returns [seq_len, batch, d_model]
+        text_encoded = self.text_encoder(text_embedded, src_key_padding_mask=None)
+        
         # Encode Image Input
         if use_image and dino_embedding is not None:
             image_embedded = self.image_embedding(dino_embedding)
-            image_encoded = self.image_encoder(
-                image_embedded, src_key_padding_mask=None)
+            image_encoded = self.image_encoder(image_embedded, src_key_padding_mask=None)
         else:
             image_encoded = None
-
-        for _ in range(max_len - 1):
-
-            tgt_embedded = self.text_embedding(generated)
-            tgt_len = tgt_embedded.size(0)  # [tgt_seq_len, batch, d_model]
-
-            # Causal mask
-            tgt_mask = self.decoder.generate_square_subsequent_mask(
-                tgt_len).to(device)
-
+        
+        for i in range(max_len - 1):
+            # Get embeddings for the current sequence
+            tgt_embedded = self.text_embedding(generated)  # [seq_len, batch, d_model]
+            
+            # Get sequence length (should be the first dimension after embedding)
+            tgt_len = tgt_embedded.size(0)
+            
+            # Create causal mask - use the decoder's function which returns the right format
+            tgt_mask = self.decoder.generate_square_subsequent_mask(tgt_len).to(device)
+            
             # Decoder pass
-            decoder_output = self.decoder(tgt_embedded, text_encoded, image_encoded, tgt_mask=tgt_mask,
-                                          tgt_key_padding_mask=None, text_memory_key_padding_mask=None, image_memory_key_padding_mask=None)
-
+            decoder_output = self.decoder(
+                tgt_embedded,
+                text_encoded, 
+                image_encoded, 
+                tgt_mask=tgt_mask,
+                tgt_key_padding_mask=None, 
+                text_memory_key_padding_mask=None, 
+                image_memory_key_padding_mask=None
+            )
+            
+            # Get the last token predictions (decoder_output is [seq_len, batch, d_model])
             last_output = decoder_output[-1]  # [batch, d_model]
             logits = self.output_layer(last_output)  # [batch, vocab_size]
             logits = logits / temperature
             probs = torch.softmax(logits, dim=-1)
-
+            
             # Sample the next token
             next_token = torch.multinomial(probs, num_samples=1)  # [batch, 1]
+            
+            # Add the new token to the sequence
             generated = torch.cat([generated, next_token], dim=1)
-
+            
             # If all sequences have generated EOS, stop early
             if (next_token == EOS_TOKEN_ID).all():
                 break
-
+        
         self.train()
         return generated
+
+# From https://stackoverflow.com/questions/77444485/using-positional-encoding-in-pytorch
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 128):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
 
 class SimpleTextEmbedding(nn.Module):
     def __init__(self, vocab_size, d_model, max_len=64, dropout=0.1):
@@ -163,31 +194,29 @@ class SimpleTextEmbedding(nn.Module):
         self.position_embedding = nn.Embedding(max_len, d_model)
         self.dropout = nn.Dropout(p=0.1)
         self.d_model = d_model
+        self.pos_encoder = PositionalEncoding(d_model, dropout, max_len)
 
     def forward(self, x):
         batch_size, seq_len = x.size()
 
         positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
         
-        token_emb = self.token_embedding(x)
-        pos_emb = self.position_embedding(positions)
+        token_emb = self.token_embedding(x) * math.sqrt(self.d_model).transpose(0, 1)
 
-        embeddings = (token_emb + pos_emb) * math.sqrt(self.d_model)
-
-        embeddings = self.dropout(embeddings)
+        embeddings = self.pos_encoder(token_emb)
         
-        return embeddings.transpose(0, 1) 
+        return embeddings
 
-class BertTextEmbedding(nn.Module):
-    def __init__(self, bert_model_name="bert-base-uncased"):
-        super().__init__()
-        self.bert = BertModel.from_pretrained(bert_model_name)
-        self.bert_dim = self.bert.config.hidden_size
+# class BertTextEmbedding(nn.Module):
+#     def __init__(self, bert_model_name="bert-base-uncased"):
+#         super().__init__()
+#         self.bert = BertModel.from_pretrained(bert_model_name)
+#         self.bert_dim = self.bert.config.hidden_size
 
-    def forward(self, x, attention_mask=None):
-        x = self.bert.embeddings(input_ids=x)
-        x *= math.sqrt(self.bert_dim)
-        return x.transpose(0, 1)  # [seq_len, batch, d_model]
+#     def forward(self, x, attention_mask=None):
+#         x = self.bert.embeddings(input_ids=x)
+#         x *= math.sqrt(self.bert_dim)
+#         return x.transpose(0, 1)  # [seq_len, batch, d_model]
 
 
 class DinoImageEmbedding(nn.Module):

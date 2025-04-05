@@ -1,5 +1,6 @@
 import os
 import time
+import math
 from datetime import datetime
 
 import torch
@@ -22,6 +23,7 @@ class Trainer:
         text_test_loader=None,
         image_caption_test_loader=None,
         lr=3e-4,
+        warmup_steps=1000,
         weight_decay=0.1,
         total_steps=100000,
         text_only_epochs=5,
@@ -55,10 +57,15 @@ class Trainer:
         self.max_epochs = text_only_epochs + image_caption_epochs
 
         self.optimizer = AdamW(self.model.parameters(
-        ), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1e-8)
+        ), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.95), eps=1e-8)
 
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer, T_max=total_steps, eta_min=1e-7)
+        self.warmup_steps = warmup_steps
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer,
+            lr_lambda=lambda step: (step + 1) / self.warmup_steps
+                if step < self.warmup_steps
+                else max(0.0, 0.5 * (1.0 + math.cos(math.pi * (step - self.warmup_steps) / max(1, total_steps - self.warmup_steps))))
+        )
 
         self.scaler = GradScaler()
 
@@ -112,9 +119,13 @@ class Trainer:
         targets = input_ids[:, 1:].contiguous()
 
         if attention_mask is not None:
-            attention_mask = attention_mask[:, :-1].contiguous()
+            src_mask = attention_mask[:, :-1].contiguous()
+            tgt_mask = attention_mask[:, 1:].contiguous()
+        else:
+            src_mask = None
+            tgt_mask = None
 
-        return inputs, targets, attention_mask
+        return inputs, targets, src_mask
 
     def _compute_loss(self, logits, targets):
         logits = logits.view(-1, logits.size(-1))
@@ -189,22 +200,22 @@ class Trainer:
                         else:
                             self.patience_counter += 1
 
-                        if (self.early_stopping_patience > 0 and 
-                            self.patience_counter >= self.early_stopping_patience):
-                            print(f"Early stopping triggered at step {self.global_step}")
-                            break
+                        # if (self.early_stopping_patience > 0 and 
+                        #     self.patience_counter >= self.early_stopping_patience):
+                        #     print(f"Early stopping triggered at step {self.global_step}")
+                        #     break
 
                 if self.global_step % self.checkpoint_steps == 0:
                     self.save_checkpoint(epoch)
-                if self.global_step >= self.total_steps:
-                    break
+                # if self.global_step >= self.total_steps:
+                #     break
 
             epoch_loss /= len(loader)
             wandb.log({"train/epoch_loss": epoch_loss, "epoch": epoch}, step=self.global_step)
             print(f"Epoch {epoch+1} Loss: {epoch_loss:.4f}")
-            if (self.global_step >= self.total_steps or 
-                (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
-                break
+            # if (self.global_step >= self.total_steps or 
+            #     (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
+            #     break
 
         # Final evaluation on test set using the appropriate loader.
         if not train_use_image and self.text_test_loader is not None:
