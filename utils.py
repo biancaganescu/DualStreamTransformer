@@ -1,45 +1,46 @@
 import json
 import numpy as np
 import os
+from random import shuffle
 def load_and_concatenate_dino_data():
-    caption_files = ["./data/image_caption/cc_3M_captions.json", "./data/image_caption/local_narr_captions.json"]
-    # caption_files = ["./data/image_caption/local_narr_captions.json"]
+    caption_files = ["/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_captions.json"]
+    # caption_files = ["/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_captions.json", "/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_captions.json"]
     all_captions = []
     for caption_file in caption_files:
         with open(caption_file, "r") as f:
             captions = json.load(f)
         all_captions.extend(captions)
-    
-    max_string = max(all_captions, key=lambda s: len(s.split()))
-    max_word_count = len(max_string.split())
 
-    # Print the result
-    print("String with maximum words:", max_string)
-    print("Maximum number of words:", max_word_count)
-    processed_embeddings = np.load("./data/image_caption/processed_embeddings.npy")
-    # processed_embeddings = np.load("./data/image_caption/local_narr_dino_v2_states.npy")
-    processed_embeddings = processed_embeddings / (np.linalg.norm(processed_embeddings, axis=1, keepdims=True) + 1e-8)
+    # three_M_1_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_1of2.npy")
+    # three_M_2_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_2of2.npy")
+    local_narr_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_dino_v2_states.npy")
 
-    assert len(all_captions) == processed_embeddings.shape[0], (
-        f"Mismatch: {len(all_captions)} captions vs {processed_embeddings.shape[0]} embeddings"
-    )
+    processed_embeddings = local_narr_embeddings
+    # processed_embeddings = np.concatenate([three_M_1_embeddings, three_M_2_embeddings, local_narr_embeddings], axis=0)
+    # assert len(all_captions) == processed_embeddings.shape[0], (
+    #     f"Mismatch: {len(all_captions)} captions vs {processed_embeddings.shape[0]} embeddings"
+    # )
     
-    print(f"DINO embeddings loaded with shape: {processed_embeddings[0].shape}")
+    # print(f"DINO embeddings loaded with shape: {processed_embeddings[0].shape}")
     
     return processed_embeddings, all_captions
 
 def load_and_concatenate_text_only_data(directory):
-  
+
     all_texts = []
     
     for filename in sorted(os.listdir(directory)):  
         if filename.endswith(".train"):
             file_path = os.path.join(directory, filename)
             with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.read().splitlines() 
+                lines = [line for line in f.read().splitlines() if len(line) > 0]
                 all_texts.extend(lines)
     
     print("all texts snippet ", all_texts[:5])
-    return all_texts[:100]
+    print("all texts len ", len(all_texts))
+
+    return all_texts
 
 
+if __name__=="__main__":
+    load_and_concatenate_dino_data()

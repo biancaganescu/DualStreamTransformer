@@ -3,19 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as functional
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import math
-# from transformers import BertModel
 
 
 class DualStreamTransformer(nn.Module):
-    """
-    Args:
-    d_model: the number of expected features in the encoder/decoder inputs (default=768).
-    nhead: the number of heads in the multiheadattention models (default=6).
-    num_encoder_layers: the number of sub-encoder-layers in the encoder (default=4).
-    num_decoder_layers: the number of sub-decoder-layers in the decoder (default=4).        
-    dropout: the dropout value (default=0.1).
-    """
-
     def __init__(
         self,
         vocab_size: int,
@@ -32,29 +22,19 @@ class DualStreamTransformer(nn.Module):
         self.d_model = d_model
 
         # Embedding layers
-        # self.text_embedding = BertTextEmbedding(bert_model_name)
         self.text_embedding = SimpleTextEmbedding(vocab_size, d_model)
         self.image_embedding = DinoImageEmbedding()
 
         # Dual-stream encoders
-        self.text_encoder = Encoder(
-            d_model, n_head, d_hid, num_encoder_layers, dropout)
-        self.image_encoder = Encoder(
-            d_model, n_head, d_hid, num_encoder_layers, dropout)
+        self.text_encoder = Encoder(d_model, n_head, d_hid, num_encoder_layers, dropout)
+        self.image_encoder = Encoder(d_model, n_head, d_hid, num_encoder_layers, dropout)
 
         # Decoder
-        self.decoder = MultimodalDecoder(
-            d_model, n_head, d_hid, num_decoder_layers, dropout)
+        self.decoder = MultimodalDecoder(d_model, n_head, d_hid, num_decoder_layers, dropout)
 
         # Output layer
         self.output_layer = nn.Linear(d_model, vocab_size)
 
-        self._init_parameters()
-
-    def _init_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
 
     def forward(
         self,
@@ -68,155 +48,126 @@ class DualStreamTransformer(nn.Module):
         text_attention_mask=None,
         use_image: bool = False
     ):
-        """
-            Forward pass:
-            text_input:         token IDs for BERT
-            dino_embedding:     image embeddings (DINO)
-            tgt:                decoder input tokens
-            is_image_available: optional flag for whether images are present
-        """
 
         # Text Embedding + Encoding
-        text_embedded = self.text_embedding(
-            text_input)
-        text_encoded = self.text_encoder(
-            text_embedded, src_key_padding_mask=text_padding_mask)
+        text_embedded = self.text_embedding(text_input)
+        text_encoded = self.text_encoder(text_embedded, src_key_padding_mask=text_padding_mask)
 
         # Image Embedding + Encoding (if use_image)
         if use_image:
             image_embedded = self.image_embedding(dino_embedding)
-            image_encoded = self.image_encoder(
-                image_embedded, src_key_padding_mask=image_padding_mask)
+            image_encoded = self.image_encoder(image_embedded, src_key_padding_mask=image_padding_mask)
         else:
             image_encoded = None
 
         # Target embedding for decode using text embeddings
         tgt_embedded = self.text_embedding(tgt)
-        tgt_len = tgt_embedded.size(0)
+        tgt_len = tgt_embedded.size(1)
 
         # Causal mask for decoder
-        tgt_mask = self.decoder.generate_square_subsequent_mask(
-            tgt_len).to(tgt.device)
+        tgt_mask = self.decoder.generate_square_subsequent_mask(tgt_len).to(tgt.device)
 
         # Decoder pass
         decoder_output = self.decoder(tgt_embedded, text_encoded, image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_padding_mask,
                                     text_memory_key_padding_mask=text_padding_mask, image_memory_key_padding_mask=image_padding_mask)
 
-        output = self.output_layer(decoder_output.transpose(0, 1))
+        output = self.output_layer(decoder_output)
 
         return output
 
-    def generate(self, text_input, dino_embedding=None, max_len=50, temperature=1.0, BOS_TOKEN_ID=101, EOS_TOKEN_ID=102, text_attention_mask=None, use_image=False):
+
+    
+    def generate(self, text_input, dino_embedding=None, max_len=50, temperature=1, use_image=False, top_k=None, tokenizer=None):
         self.eval()
-        device = text_input.device
-        batch_size = text_input.size(0)
+        device = text_input.device        
+        generated = torch.tensor([[tokenizer.cls_token_id]], device=device)
         
-        # Initialize the generated sequence with BOS token
-        generated = torch.LongTensor([[BOS_TOKEN_ID]] * batch_size).to(device)
+        with torch.no_grad():
+            text_embedded = self.text_embedding(text_input)
+            text_encoded = self.text_encoder(text_embedded)
         
-        # Encode Text Input
-        text_embedded = self.text_embedding(text_input)  # This returns [seq_len, batch, d_model]
-        text_encoded = self.text_encoder(text_embedded, src_key_padding_mask=None)
-        
-        # Encode Image Input
         if use_image and dino_embedding is not None:
             image_embedded = self.image_embedding(dino_embedding)
-            image_encoded = self.image_encoder(image_embedded, src_key_padding_mask=None)
+            image_encoded = self.image_encoder(image_embedded)
         else:
             image_encoded = None
         
-        for i in range(max_len - 1):
+        
+        for i in range(max_len):
             # Get embeddings for the current sequence
-            tgt_embedded = self.text_embedding(generated)  # [seq_len, batch, d_model]
+            tgt_embedded = self.text_embedding(generated) 
+            # Get sequence length from the sequence dimension
+            tgt_len = tgt_embedded.size(1)
             
-            # Get sequence length (should be the first dimension after embedding)
-            tgt_len = tgt_embedded.size(0)
-            
-            # Create causal mask - use the decoder's function which returns the right format
+            # Create causal mask for the current sequence length
             tgt_mask = self.decoder.generate_square_subsequent_mask(tgt_len).to(device)
             
             # Decoder pass
             decoder_output = self.decoder(
                 tgt_embedded,
-                text_encoded, 
-                image_encoded, 
+                text_encoded,
+                image_encoded,
                 tgt_mask=tgt_mask,
-                tgt_key_padding_mask=None, 
-                text_memory_key_padding_mask=None, 
+                tgt_key_padding_mask=None,
+                text_memory_key_padding_mask=None,
                 image_memory_key_padding_mask=None
             )
             
-            # Get the last token predictions (decoder_output is [seq_len, batch, d_model])
-            last_output = decoder_output[-1]  # [batch, d_model]
-            logits = self.output_layer(last_output)  # [batch, vocab_size]
-            logits = logits / temperature
-            probs = torch.softmax(logits, dim=-1)
             
+            last_output = decoder_output[:, -1, :] 
+            
+            logits = self.output_layer(last_output) 
+            logits = logits / temperature
+            
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+                
+            probs = torch.softmax(logits, dim=-1)
+
+            # For debug
+            topk_values, topk_indices = torch.topk(probs, 10, dim=-1) 
+            top_tokens = tokenizer.convert_ids_to_tokens(topk_indices[0].tolist())
+            top_probs = topk_values[0].tolist()
+            print(f"Step {i+1}: Top 10 predictions:")
+            for token, prob in zip(top_tokens, top_probs):
+                print(f"  {token}: {prob:.4f}")
+
             # Sample the next token
-            next_token = torch.multinomial(probs, num_samples=1)  # [batch, 1]
+            next_token = torch.multinomial(probs, num_samples=1)
             
             # Add the new token to the sequence
             generated = torch.cat([generated, next_token], dim=1)
-            
-            # If all sequences have generated EOS, stop early
-            if (next_token == EOS_TOKEN_ID).all():
+
+            if (next_token == tokenizer.sep_token_id).all():
                 break
-        
         self.train()
         return generated
-
-# From https://stackoverflow.com/questions/77444485/using-positional-encoding-in-pytorch
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 128):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-        """
-        x = x + self.pe[:x.size(0)]
-        return self.dropout(x)
+  
 
 class SimpleTextEmbedding(nn.Module):
-    def __init__(self, vocab_size, d_model, max_len=64, dropout=0.1):
+    def __init__(self, vocab_size, d_model, max_len=128, dropout=0.1):
         super().__init__()
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         self.position_embedding = nn.Embedding(max_len, d_model)
-        self.dropout = nn.Dropout(p=0.1)
+        self.layer_norm = nn.LayerNorm(d_model) 
+        self.dropout = nn.Dropout(p=dropout)
         self.d_model = d_model
-        self.pos_encoder = PositionalEncoding(d_model, dropout, max_len)
+        
 
     def forward(self, x):
         batch_size, seq_len = x.size()
-
+ 
         positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, seq_len)
-        
-        token_emb = self.token_embedding(x) * math.sqrt(self.d_model).transpose(0, 1)
+        scale = torch.sqrt(torch.FloatTensor([self.d_model])).to(x.device)
 
-        embeddings = self.pos_encoder(token_emb)
-        
+        token_emb = self.token_embedding(x) * scale
+        pos_emb = self.position_embedding(positions)
+ 
+        embeddings = self.dropout(token_emb + pos_emb)
+    
         return embeddings
 
-# class BertTextEmbedding(nn.Module):
-#     def __init__(self, bert_model_name="bert-base-uncased"):
-#         super().__init__()
-#         self.bert = BertModel.from_pretrained(bert_model_name)
-#         self.bert_dim = self.bert.config.hidden_size
-
-#     def forward(self, x, attention_mask=None):
-#         x = self.bert.embeddings(input_ids=x)
-#         x *= math.sqrt(self.bert_dim)
-#         return x.transpose(0, 1)  # [seq_len, batch, d_model]
 
 
 class DinoImageEmbedding(nn.Module):
@@ -224,14 +175,13 @@ class DinoImageEmbedding(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        return x.unsqueeze(0)  # [1, batch_size, dino_dim]
+        return x.unsqueeze(1)
 
 
 class Encoder(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, n_layers: int, dropout: float = 0.1):
         super().__init__()
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model, n_head, d_hid, dropout, activation="gelu")
+        encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, d_hid, dropout, activation="gelu", batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
@@ -256,7 +206,6 @@ class DynamicGating(nn.Module):
 
         fused = gate * text_features + (1 - gate) * image_features
 
-        # potentially change to self.layer_norm(text_features + self.dropout(fused))
         fused = self.layer_norm(self.dropout(fused))
 
         return fused
@@ -266,14 +215,11 @@ class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
         super().__init__()
         # Self Attention
-        self.self_attn = nn.MultiheadAttention(
-            d_model, n_head, dropout=dropout)
+        self.self_attn = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
         # Cross Attention with Text
-        self.cross_attn_text = nn.MultiheadAttention(
-            d_model, n_head, dropout=dropout)
+        self.cross_attn_text = nn.MultiheadAttention( d_model, n_head, dropout=dropout, batch_first=True)
         # Cross Attention with Image
-        self.cross_attn_image = nn.MultiheadAttention(
-            d_model, n_head, dropout=dropout)
+        self.cross_attn_image = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -291,69 +237,78 @@ class MultimodalDecoderLayer(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_hid, d_model),
-            nn.Dropout(dropout),
-            nn.LayerNorm(d_model)
-        )
+            nn.Dropout(dropout))
 
     def forward(self, tgt, text_memory, image_memory,
                     tgt_mask=None, tgt_key_padding_mask=None,
                     text_memory_key_padding_mask=None, image_memory_key_padding_mask=None):
-        """
-        Args:
-            tgt: [tgt_seq_len, batch_size, d_model]
-            text_memory: [text_seq_len, batch_size, d_model]
-            image_memory: [1, batch_size, d_model] or [img_seq_len, batch_size, d_model]
-        """
 
-        # Masked self-attention
-        tgt2, _ = self.self_attn(
-            tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)
+        tgt = self.norm1(self.dropout(self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask,  key_padding_mask=tgt_key_padding_mask, is_causal=True)[0])) + tgt
 
-        tgt = self.norm1(self.dropout(tgt2) + tgt)
+        tgt = self.norm2(self.dropout(self.cross_attn_text(tgt, text_memory, text_memory, key_padding_mask=text_memory_key_padding_mask)[0]))
 
-        # Cross-attention to text
-        text_attn, _ = self.cross_attn_text(
-            tgt, text_memory, text_memory, key_padding_mask=text_memory_key_padding_mask)
+        tgt = self.norm3(self.dropout(self.ff(tgt)) + tgt)
 
-        text_out = self.norm2(self.dropout(text_attn) + tgt)
+        return tgt
+        # tgt_norm = self.norm1(tgt)
+        # tgt2, _ = self.self_attn(tgt_norm, tgt_norm, tgt_norm, 
+        #                         key_padding_mask=tgt_key_padding_mask, attn_mask=tgt_mask, is_causal=True)
 
-        # Cross-attention to image
-        if image_memory is not None:
-            image_attn, _ = self.cross_attn_image(
-                tgt, image_memory, image_memory, key_padding_mask=image_memory_key_padding_mask)
+        # # Residual connection
+        # tgt = tgt + self.dropout(tgt2)
 
-            image_out = self.norm3(self.dropout(image_attn) + tgt)
-        else:
-            image_out = None
+        # # Pre-layer normalization for text cross-attention
+        # tgt_norm = self.norm2(tgt)
+        # text_attn, _ = self.cross_attn_text(tgt_norm, text_memory, text_memory, 
+        #                                    key_padding_mask=text_memory_key_padding_mask)
+        # # Residual connection
+        # text_out = tgt + self.dropout(text_attn)
 
-        # Gating
-        fused = self.gate(text_out, image_out)
+        # # Pre-layer normalization for image cross-attention (if available)
+        # if image_memory is not None:
+        #     tgt_norm = self.norm3(tgt)
+        #     image_attn, _ = self.cross_attn_image(tgt_norm, image_memory, image_memory, 
+        #                                          key_padding_mask=image_memory_key_padding_mask)
+        #     # Residual connection
+        #     image_out = tgt + self.dropout(image_attn)
 
-        # Feed forward for the output
-        output = self.ff(fused)
+    
+        # # Consistent computational path whether using image or not
+        # if image_memory is None:
+        #     fused = text_out
+        # else:
+        #     fused = self.gate(text_out, image_out)  # Use the same tensor for both since image features are already merged
 
-        return self.norm4(output + fused)
+        # # Pre-layer normalization for feed-forward
+        # fused_norm = self.norm4(fused)
+        # output = self.ff(fused_norm)
+        
+        # # Final residual connection
+        # return fused + self.dropout(output)
+        # # return self.ff(tgt2)
 
-
+    
 class MultimodalDecoder(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, n_layers: int, dropout: float = 0.1):
         super().__init__()
-        self.layers = nn.ModuleList([MultimodalDecoderLayer(
-            d_model, n_head, d_hid, dropout) for _ in range(n_layers)])
+        self.layers = nn.ModuleList([nn.TransformerDecoderLayer(d_model, n_head, d_hid, dropout, batch_first=True) for _ in range(n_layers)])
 
     def generate_square_subsequent_mask(self, size):
-        """
-        Generates an upper-triangular mask for causal decoding.
-        """
-        mask = torch.triu(torch.ones(size, size)) == 1
-        mask = mask.float().masked_fill(mask == 0, float(
-            '-inf')).masked_fill(mask == 1, float(0.0))
+        # mask = torch.triu(torch.ones(size, size), diagonal=1)
+        # mask = mask.float().masked_fill(mask == 1, float(-1e4)).masked_fill(mask == 0, float(0.0))
+        # return mask
+        mask = torch.triu(torch.ones(size, size), diagonal=1).bool()
         return mask
+
 
     def forward(self, tgt, text_memory, image_memory, tgt_mask,  tgt_key_padding_mask=None, text_memory_key_padding_mask=None, image_memory_key_padding_mask=None):
         output = tgt
         for layer in self.layers:
-            output = layer(output, text_memory, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask,
-                           text_memory_key_padding_mask=text_memory_key_padding_mask, image_memory_key_padding_mask=image_memory_key_padding_mask)
+            # output = layer(output, text_memory, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask,
+            #                text_memory_key_padding_mask=text_memory_key_padding_mask, image_memory_key_padding_mask=image_memory_key_padding_mask)
+
+            output = layer(output, text_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask,
+                           memory_key_padding_mask=text_memory_key_padding_mask, tgt_is_causal=True)
+
 
         return output

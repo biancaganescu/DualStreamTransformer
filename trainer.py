@@ -2,7 +2,8 @@ import os
 import time
 import math
 from datetime import datetime
-
+import torch.nn.functional as F
+import random
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -10,6 +11,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 import wandb
+from torch.utils.data import DataLoader
+from transformers import BertTokenizerFast
+
+tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
 
 
 class Trainer:
@@ -22,17 +27,17 @@ class Trainer:
         image_caption_val_loader=None,
         text_test_loader=None,
         image_caption_test_loader=None,
-        lr=3e-4,
+        lr=1e-5,
         warmup_steps=1000,
-        weight_decay=0.1,
+        weight_decay=0.01,
         total_steps=100000,
         text_only_epochs=5,
         image_caption_epochs=5,
         checkpoint_dir="checkpoints",
         device="cuda",
-        clip_grad_norm=1.0,
-        eval_steps=10000,
-        checkpoint_steps=20000,
+        clip_grad_norm=None,
+        eval_steps=5000,
+        checkpoint_steps=5000,
         early_stopping_patience=5,
         wandb_project="dual-stream-model",
         wandb_run_name=None,
@@ -57,7 +62,7 @@ class Trainer:
         self.max_epochs = text_only_epochs + image_caption_epochs
 
         self.optimizer = AdamW(self.model.parameters(
-        ), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.95), eps=1e-8)
+        ), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.999), eps=1e-8)
 
         self.warmup_steps = warmup_steps
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -69,7 +74,7 @@ class Trainer:
 
         self.scaler = GradScaler()
 
-        self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         self.total_steps = total_steps
         self.clip_grad_norm = clip_grad_norm
@@ -114,46 +119,47 @@ class Trainer:
 
         return text_input, text_mask, dino_embedding
 
-    def _prepare_inputs_targets(self, input_ids, attention_mask):
-        inputs = input_ids[:, :-1].contiguous()
-        targets = input_ids[:, 1:].contiguous()
+    
+    # def _prepare_inputs_targets(self, input_ids, attention_mask):
+    #     inputs = input_ids[:, :-1].contiguous()
+    #     targets = input_ids[:, 1:].contiguous()
 
-        if attention_mask is not None:
-            src_mask = attention_mask[:, :-1].contiguous()
-            tgt_mask = attention_mask[:, 1:].contiguous()
-        else:
-            src_mask = None
-            tgt_mask = None
+    #     if attention_mask is not None:
+    #         src_mask = attention_mask[:, :-1].contiguous()
+    #         tgt_mask = attention_mask[:, 1:].contiguous()
+    #     else:
+    #         src_mask = None
+    #         tgt_mask = None
 
-        return inputs, targets, src_mask
+    #     return inputs, targets, src_mask, tgt_mask
 
     def _compute_loss(self, logits, targets):
         logits = logits.view(-1, logits.size(-1))
         targets = targets.view(-1)
-        logits = torch.clamp(logits, min=-1e4, max=1e4)
+        # logits = torch.clamp(logits, min=-1e4, max=1e4)
         return self.criterion(logits, targets)
 
-    def train_step(self, batch, use_image):
-        text_input, text_mask, dino_embedding = self._process_batch(batch)
-        inputs, targets, input_mask = self._prepare_inputs_targets(text_input, text_mask)
+    # def train_step(self, batch, use_image):
+    #     text_input, text_mask, dino_embedding = self._process_batch(batch)
+    #     inputs, targets, input_mask, tgt_mask = self._prepare_inputs_targets(text_input, text_mask)
 
-        self.optimizer.zero_grad()
+    #     self.optimizer.zero_grad()
 
-        with autocast():
-            outputs = self.model(text_input=inputs, dino_embedding=dino_embedding, tgt=targets, text_padding_mask=(input_mask == 0) if input_mask is not None else None, use_image=use_image)
-            loss = self._compute_loss(outputs, targets)
+    #     with autocast():
+    #         outputs = self.model(text_input=inputs, dino_embedding=dino_embedding, tgt=targets, text_padding_mask=(input_mask == 0) if input_mask is not None else None, tgt_padding_mask=(tgt_mask == 0) if tgt_mask is not None else None, use_image=use_image)
+    #         loss = self._compute_loss(outputs, targets)
     
-        self.scaler.scale(loss).backward()
+    #     self.scaler.scale(loss).backward()
 
-        if self.clip_grad_norm > 0:
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+    #     if self.clip_grad_norm > 0:
+    #         self.scaler.unscale_(self.optimizer)
+    #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
 
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self.scheduler.step()
+    #     self.scaler.step(self.optimizer)
+    #     self.scaler.update()
+    #     self.scheduler.step()
 
-        return loss.item()
+    #     return loss.item()
 
     
     def train(self):
@@ -229,31 +235,33 @@ class Trainer:
 
 
 
-    def evaluate_loader(self, loader, use_image, prefix):
-        self.model.eval()
-        total_loss = 0.0
-        batch_count = 0
-        with torch.no_grad():
-            for batch in tqdm(loader, desc=f"Evaluating {prefix}"):
-                text_input, text_mask, dino_embedding = self._process_batch(batch)
-                inputs, targets, input_mask = self._prepare_inputs_targets(text_input, text_mask)
-                with autocast():
-                    outputs = self.model(
-                        text_input=inputs,
-                        dino_embedding=dino_embedding,
-                        tgt=targets,
-                        text_padding_mask=(input_mask == 0) if input_mask is not None else None,
-                        use_image=use_image
-                    )
-                    loss = self._compute_loss(outputs, targets)
-                total_loss += loss
-                batch_count += 1
-        avg_loss = total_loss / max(batch_count, 1)
-        perplexity = torch.exp(torch.tensor(avg_loss)).item()
-        self.model.train()
-        metrics = {f"{prefix}/loss": avg_loss, f"{prefix}/perplexity": perplexity}
-        wandb.log(metrics, step=self.global_step)
-        return avg_loss, metrics
+    # def evaluate_loader(self, loader, use_image, prefix):
+    #     self.model.eval()
+    #     total_loss = 0.0
+    #     batch_count = 0
+    #     with torch.no_grad():
+    #         for batch in tqdm(loader, desc=f"Evaluating {prefix}"):
+    #             text_input, text_mask, dino_embedding = self._process_batch(batch)
+    #             inputs, targets, src_mask, tgt_mask = self._prepare_inputs_targets(text_input, text_mask)
+    #             with autocast():
+    #                 outputs = self.model(
+    #                 text_input=inputs,  # Full sequence
+    #                 dino_embedding=dino_embedding,
+    #                 tgt=targets,  # Shifted input
+    #                 text_padding_mask=(src_mask == 0) if src_mask is not None else None,
+    #                 tgt_padding_mask=(tgt_mask == 0) if tgt_mask is not None else None,
+    #                 use_image=use_image
+    #                 )
+    #             loss = self._compute_loss(outputs, targets)
+
+    #             total_loss += loss
+    #             batch_count += 1
+    #     avg_loss = total_loss / max(batch_count, 1)
+    #     perplexity = torch.exp(torch.tensor(avg_loss)).item()
+    #     self.model.train()
+    #     metrics = {f"{prefix}/loss": avg_loss, f"{prefix}/perplexity": perplexity}
+    #     wandb.log(metrics, step=self.global_step)
+    #     return avg_loss, metrics
 
 
 
@@ -283,4 +291,221 @@ class Trainer:
         self.global_step = checkpoint.get("global_step", 0)
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
         return checkpoint.get("epoch", 0)
+    
+    
 
+    # def compute_repetition_loss_vectorized(self, outputs):
+    #     batch_size, seq_len, vocab_size = outputs.size()
+        
+    #     topk = 5
+    #     _, top_indices = torch.topk(outputs, topk, dim=-1)  
+        
+    #     window_size = 5
+    #     rep_loss = torch.tensor(0.0, device=outputs.device)
+        
+    #     for pos in range(window_size, seq_len):
+    #         curr_preds = top_indices[:, pos, :] 
+            
+    #         history = top_indices[:, pos-window_size:pos, 0] 
+            
+
+    #         curr_preds_expanded = curr_preds.unsqueeze(-1)
+    #         history_expanded = history.unsqueeze(1)
+            
+    #         # Check which current predictions appear in history
+    #         matches = (curr_preds_expanded == history_expanded)
+            
+    #         # Sum over window dimension to get total matches per prediction
+    #         # Then sum over topk dimension to get total repetitions
+    #         batch_rep_loss = matches.any(dim=-1).float().sum(dim=-1)
+            
+    #         # Add to the total loss
+    #         rep_loss += batch_rep_loss.sum()
+        
+    #     # Normalize by batch size and sequence length
+    #     return rep_loss / (batch_size * seq_len)
+    
+    # def train_step_with_repetition_penalty(self, batch, use_image):
+    #     text_input, text_mask, dino_embedding = self._process_batch(batch)
+    #     inputs, targets, input_mask, tgt_mask = self._prepare_inputs_targets(text_input, text_mask)
+
+    #     self.optimizer.zero_grad()
+
+    #     with autocast():
+    #         outputs = self.model(
+    #             text_input=inputs, 
+    #             dino_embedding=dino_embedding, 
+    #             tgt=targets, 
+    #             text_padding_mask=(input_mask == 0) if input_mask is not None else None, 
+    #             tgt_padding_mask=(tgt_mask == 0) if tgt_mask is not None else None,
+    #             use_image=use_image
+    #         )
+            
+    #         # Regular cross-entropy loss
+    #         primary_loss = self._compute_loss(outputs, targets)
+            
+    #         # Add vectorized repetition penalty term
+    #         rep_loss = self.compute_repetition_loss_vectorized(outputs)
+            
+    #         # Combined loss
+    #         loss = primary_loss + 10 * rep_loss
+        
+    #     # Backward pass and optimization (same as before)
+    #     self.scaler.scale(loss).backward()
+    
+    #     if self.clip_grad_norm is not None and self.clip_grad_norm  > 0:
+    #         self.scaler.unscale_(self.optimizer)
+    #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
+    #     self.scaler.step(self.optimizer)
+    #     self.scaler.update()
+    #     self.scheduler.step()
+        
+    #     return loss.item()
+    
+    # def _prepare_inputs_targets(self, input_ids, attention_mask):
+    #     encoder_input = input_ids
+        
+    #     decoder_input = torch.cat([
+    #         input_ids.new_full((input_ids.size(0), 1), tokenizer.cls_token_id),
+    #         input_ids[:, :-1]
+    #     ], dim=1)
+        
+    #     targets = input_ids
+        
+    #     if attention_mask is not None:
+    #         encoder_mask = attention_mask
+    #         decoder_mask = torch.cat([
+    #             attention_mask.new_ones((attention_mask.size(0), 1)),
+    #             attention_mask[:, :-1]
+    #         ], dim=1)
+    #     else:
+    #         encoder_mask = decoder_mask = None
+        
+    #     return encoder_input, decoder_input, targets, encoder_mask, decoder_mask
+
+    # def train_step(self, batch, use_image):
+    #     text_input, text_mask, dino_embedding = self._process_batch(batch)
+    #     encoder_input, decoder_input, targets, encoder_mask, decoder_mask = self._prepare_inputs_targets(text_input, text_mask)
+
+    #     self.optimizer.zero_grad()
+
+    #     with autocast():
+    #         outputs = self.model(
+    #             text_input=encoder_input,  # Full sequence
+    #             dino_embedding=dino_embedding,
+    #             tgt=decoder_input,  # Shifted input
+    #             text_padding_mask=(encoder_mask == 0) if encoder_mask is not None else None,
+    #             tgt_padding_mask=(decoder_mask == 0) if decoder_mask is not None else None,
+    #             use_image=use_image
+    #         )
+    #         loss = self._compute_loss(outputs, targets, decoder_mask)
+
+    #         self.scaler.scale(loss).backward()
+
+    #         if self.clip_grad_norm > 0:
+    #             self.scaler.unscale_(self.optimizer)
+    #             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+
+    #         self.scaler.step(self.optimizer)
+    #         self.scaler.update()
+    #         self.scheduler.step()
+
+    #         return loss.item()
+
+    # def _compute_loss(self, logits, targets, mask=None):
+    #     logits = logits.view(-1, logits.size(-1))
+    #     targets = targets.view(-1)
+    #     loss = F.cross_entropy(logits, targets, reduction='none')
+        
+    #     if mask is not None:
+    #         mask = mask.view(-1).float()
+    #         loss = (loss * mask).sum() / mask.sum()
+    #     else:
+    #         loss = loss.mean()
+        
+    #     return loss
+
+    def _prepare_inputs_targets(self, input_ids, attention_mask):
+        encoder_input = input_ids
+        
+        decoder_input = input_ids[:, :-1].contiguous()
+        
+        targets = input_ids[:, 1:].contiguous()
+        
+        if attention_mask is not None:
+            encoder_mask = attention_mask
+            decoder_mask = attention_mask[:, :-1].contiguous()
+        else:
+            encoder_mask = None
+            decoder_mask = None
+        
+        return encoder_input, decoder_input, targets, encoder_mask, decoder_mask
+
+    def train_step(self, batch, use_image):
+        text_input, text_mask, dino_embedding = self._process_batch(batch)
+        
+        encoder_input, decoder_input, targets, encoder_mask, decoder_mask = self._prepare_inputs_targets(text_input, text_mask )
+        
+        self.optimizer.zero_grad()
+        
+
+        outputs = self.model(
+                text_input=encoder_input,  
+                dino_embedding=dino_embedding,
+                tgt=decoder_input,  
+                text_padding_mask=(encoder_mask == 0) if encoder_mask is not None else None,
+                tgt_padding_mask=(decoder_mask == 0) if decoder_mask is not None else None,
+                use_image=use_image
+        )
+            
+        loss = self._compute_loss(outputs, targets)
+        
+        self.scaler.scale(loss).backward()
+        
+        if self.clip_grad_norm > 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+        
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.scheduler.step()
+        
+        return loss.item()
+
+    def evaluate_loader(self, loader, use_image, prefix):
+        self.model.eval()
+        total_loss = 0.0
+        batch_count = 0
+        
+        with torch.no_grad():
+            for batch in tqdm(loader, desc=f"Evaluating {prefix}"):
+                text_input, text_mask, dino_embedding = self._process_batch(batch)
+                encoder_input, decoder_input, targets, encoder_mask, decoder_mask = self._prepare_inputs_targets(
+                    text_input, text_mask
+                )
+
+                outputs = self.model(
+                        text_input=encoder_input,  # Full sequence for encoder
+                        dino_embedding=dino_embedding,
+                        tgt=decoder_input,  # Shifted sequence for decoder
+                        text_padding_mask=(encoder_mask == 0) if encoder_mask is not None else None,
+                        tgt_padding_mask=(decoder_mask == 0) if decoder_mask is not None else None,
+                        use_image=use_image)
+                    
+                    
+
+                loss = self._compute_loss(outputs, targets)
+                
+                total_loss += loss.item()
+                batch_count += 1
+        
+        avg_loss = total_loss / max(batch_count, 1)
+        perplexity = torch.exp(torch.tensor(avg_loss)).item()
+        
+        self.model.train()
+        
+        metrics = {f"{prefix}/loss": avg_loss, f"{prefix}/perplexity": perplexity}
+        wandb.log(metrics, step=self.global_step)
+        
+        return avg_loss, metrics
