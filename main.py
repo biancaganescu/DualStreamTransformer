@@ -39,7 +39,7 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DualStreamTransformer with BERT embeddings")
-    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--warmup-steps", type=int, default=1000, help="Warmup steps")
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--total-steps", type=int, default=100000, help="Total training steps")
     parser.add_argument("--eval-steps", type=int, default=5000, help="Eval steps")
     parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
-    parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
+    parser.add_argument("--image-caption-epochs", type=int, default=0, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
     parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     dino_embeddings, captions = load_and_concatenate_dino_data()
 
     print("Loading text-only data...")
-    text_only_data = load_and_concatenate_text_only_data("/home/bmg44/DualStreamTransformer/data/text_only/processed_train_50M")
+    text_only_data = load_and_concatenate_text_only_data("/home/bmg44/DualStreamTransformer/data/text_only/train_50M")
 
     (text_train_loader, text_val_loader, text_test_loader,
      image_caption_train_loader, image_caption_val_loader, image_caption_test_loader) = create_dataloaders(

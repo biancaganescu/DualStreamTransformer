@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+import torch.nn.functional as F
 
 class TextOnlyDataset(Dataset):
     def __init__(self, text_data, tokenizer, sequence_length=128):
@@ -31,6 +32,7 @@ class TextOnlyDataset(Dataset):
             "text_input": text_input,
             "text_mask": text_mask,
         }
+
 
 class DINOCaptionDataset(Dataset):
 
