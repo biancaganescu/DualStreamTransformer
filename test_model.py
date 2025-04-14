@@ -1,6 +1,7 @@
 from model import DualStreamTransformer
 from transformers import AutoTokenizer
 import torch
+from tokenizers.processors import TemplateProcessing
 
 tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
 tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})

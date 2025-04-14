@@ -17,12 +17,11 @@ def load_and_concatenate_dino_data():
 
     processed_embeddings = local_narr_embeddings
     processed_embeddings = np.concatenate([three_M_1_embeddings, three_M_2_embeddings, local_narr_embeddings], axis=0)
-    # assert len(all_captions) == processed_embeddings.shape[0], (
-    #     f"Mismatch: {len(all_captions)} captions vs {processed_embeddings.shape[0]} embeddings"
-    # )
+    assert len(all_captions) == processed_embeddings.shape[0], (
+        f"Mismatch: {len(all_captions)} captions vs {processed_embeddings.shape[0]} embeddings"
+    )
     
-    # print(f"DINO embeddings loaded with shape: {processed_embeddings[0].shape}")
-    
+    print("all image caption len", len(all_captions))
     return processed_embeddings, all_captions
 
 def load_and_concatenate_text_only_data(directory):
