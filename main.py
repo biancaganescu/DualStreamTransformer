@@ -47,6 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs (text-only + image-caption)")
     parser.add_argument("--total-steps", type=int, default=1107015, help="Total training steps")
     parser.add_argument("--eval-steps", type=int, default=50000, help="Eval steps")
+    parser.add_argument("--checkpoint-steps", type=int, default=50000, help="Checkpoint steps")
     parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
     parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
@@ -132,6 +133,7 @@ if __name__ == "__main__":
         device=args.device,
         clip_grad_norm=args.clip_grad_norm,
         eval_steps=args.eval_steps,
+        checkpoint_steps=args.checkpoint_steps,
         wandb_project="dual-stream-model",
         wandb_run_name=f"dual_stream_{timestamp}",
         warmup_steps=args.warmup_steps
