@@ -32,7 +32,8 @@ def load_and_concatenate_text_only_data(directory):
         if filename.endswith(".train"):
             file_path = os.path.join(directory, filename)
             with open(file_path, "r", encoding="utf-8") as f:
-                lines = [line for line in f.read().splitlines() if len(line) > 0]
+                # lines = [line for line in f.read().splitlines() if len(line) > 0]
+                lines = [' '.join(line.split()) for line in f.read().splitlines() if (line.strip() and len(line) > 0)]
                 all_texts.extend(lines)
     
     print("all texts snippet ", all_texts[:5])

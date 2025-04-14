@@ -41,7 +41,7 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DualStreamTransformer")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--warmup-steps", type=int, default=12000, help="Warmup steps")
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs (text-only + image-caption)")
@@ -50,9 +50,14 @@ if __name__ == "__main__":
     parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
     parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
-    parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints", help="Checkpoint directory")
+    parser.add_argument("--n-head", type=int, default=12, help="Number of attention heads")
+    parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
+    parser.add_argument("--num-encoder-layers", type=int, default=4, help="Number of image encoder layers")
+    parser.add_argument("--num-decoder-layers", type=int, default=6, help="Number of decoder layers")
+    parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints/medium_size", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--resume-from", type=str, default=None, help="Resume training from checkpoint")
     args = parser.parse_args()
 
@@ -92,12 +97,12 @@ if __name__ == "__main__":
     model = DualStreamTransformer(
         vocab_size=vocab_size,
         d_model=args.d_model,
-        n_head=4,
-        d_hid=512,
-        num_encoder_layers=3,
-        num_decoder_layers=3,
+        n_head=args.n_head,
+        d_hid=args.d_hid,
+        num_encoder_layers=args.num_encoder_layers,
+        num_decoder_layers=args.num_decoder_layers,
         dino_dim=768,
-        dropout=0.1
+        dropout=args.dropout
     )
 
 

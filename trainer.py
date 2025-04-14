@@ -165,7 +165,7 @@ class Trainer:
     def train(self):
         start_time = time.time()
         for epoch in range(self.max_epochs):
-            if epoch < self.text_only_epochs:
+            if epoch % 2 == 0:
                 loader = self.text_train_loader
                 train_use_image = False
             else:

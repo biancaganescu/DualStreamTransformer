@@ -12,7 +12,7 @@ special_tokens=[(tokenizer.eos_token, tokenizer.eos_token_id), (tokenizer.bos_to
 
 vocab_size = len(tokenizer)
 
-text = "[CLS]  In this picture "
+text = "[BOS]My friend is"
 # Get the tokenized input as a dictionary
 tokenized_input = tokenizer(text, return_tensors="pt", add_special_tokens=False)
 # Extract the input_ids and move to GPU
@@ -37,9 +37,9 @@ model = DualStreamTransformer(
 )
 model.to("cuda:0")  # Make sure the model is also on the GPU
 
-model.load_state_dict(torch.load("./checkpoints/run_20250412_121830/best_checkpoint.pt")["model_state_dict"])
-print("global step ", torch.load("./checkpoints/run_20250412_121830/best_checkpoint.pt")["global_step"])
+model.load_state_dict(torch.load("./checkpoints/run_20250414_115217/best_checkpoint.pt")["model_state_dict"])
+print("global step ", torch.load("./checkpoints/run_20250414_115217/best_checkpoint.pt")["global_step"])
 # Now pass the tensor to generate
 print(input_ids)
-generated = model.generate(input_ids, temperature=1, tokenizer=tokenizer, top_k=50)
+generated = model.generate(input_ids, temperature=0.2, tokenizer=tokenizer, top_k=None)
 print(tokenizer.decode(generated[0]))

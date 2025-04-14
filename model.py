@@ -115,7 +115,7 @@ class DualStreamTransformer(nn.Module):
                 generated = torch.cat([generated, next_token], dim=1)
                 
                 # Stop if end token is generated for all sequences
-                if tokenizer is not None and (next_token == tokenizer.eos_token).all():
+                if tokenizer is not None and next_token == tokenizer.eos_token_id:
                     break
         
         self.train()  # Restore training mode
