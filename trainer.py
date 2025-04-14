@@ -12,9 +12,7 @@ from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 import wandb
 from torch.utils.data import DataLoader
-from transformers import BertTokenizerFast
 
-tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
 
 
 class Trainer:
@@ -145,7 +143,7 @@ class Trainer:
             # The model internally handles causal masking
             outputs = self.model(
                 input_ids=input_ids, 
-                padding_mask=attention_mask,
+                padding_mask=(attention_mask == 0),
                 dino_embedding=dino_embedding,
                 use_image=use_image
             )
@@ -167,7 +165,7 @@ class Trainer:
     def train(self):
         start_time = time.time()
         for epoch in range(self.max_epochs):
-            if epoch < self.text_only_epochs:
+            if epoch >= self.text_only_epochs:
                 loader = self.text_train_loader
                 train_use_image = False
             else:
@@ -248,7 +246,7 @@ class Trainer:
                 with autocast():
                     outputs = self.model(
                         input_ids=input_ids,
-                        padding_mask=attention_mask,
+                        padding_mask=(attention_mask == 0),
                         dino_embedding=dino_embedding,
                         use_image=use_image
                     )

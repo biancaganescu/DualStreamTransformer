@@ -21,7 +21,7 @@ class TextOnlyDataset(Dataset):
             max_length=self.sequence_length,
             padding='max_length',
             return_tensors="pt",
-            add_special_tokens=True  # Keep special tokens (CLS, SEP)
+            add_special_tokens=True  # Add BOS and EOS
         )
         
         # Extract input_ids and attention_mask

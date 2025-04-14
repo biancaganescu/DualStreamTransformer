@@ -4,19 +4,19 @@ import os
 from random import shuffle
 def load_and_concatenate_dino_data():
     caption_files = ["/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_captions.json"]
-    # caption_files = ["/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_captions.json", "/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_captions.json"]
+    caption_files = ["/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_captions.json", "/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_captions.json"]
     all_captions = []
     for caption_file in caption_files:
         with open(caption_file, "r") as f:
             captions = json.load(f)
         all_captions.extend(captions)
 
-    # three_M_1_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_1of2.npy")
-    # three_M_2_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_2of2.npy")
+    three_M_1_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_1of2.npy")
+    three_M_2_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/cc_3M_dino_v2_states_2of2.npy")
     local_narr_embeddings = np.load("/home/bmg44/DualStreamTransformer/data/image_caption/local_narr_dino_v2_states.npy")
 
     processed_embeddings = local_narr_embeddings
-    # processed_embeddings = np.concatenate([three_M_1_embeddings, three_M_2_embeddings, local_narr_embeddings], axis=0)
+    processed_embeddings = np.concatenate([three_M_1_embeddings, three_M_2_embeddings, local_narr_embeddings], axis=0)
     # assert len(all_captions) == processed_embeddings.shape[0], (
     #     f"Mismatch: {len(all_captions)} captions vs {processed_embeddings.shape[0]} embeddings"
     # )

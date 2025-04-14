@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
 from model import DualStreamTransformer
 from trainer import Trainer
-from transformers import BertTokenizerFast
+from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
 
 def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42):
@@ -38,7 +38,7 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
             image_caption_train_loader, image_caption_val_loader, image_caption_test_loader)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train DualStreamTransformer with BERT embeddings")
+    parser = argparse.ArgumentParser(description="Train DualStreamTransformer")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--warmup-steps", type=int, default=1000, help="Warmup steps")
@@ -49,15 +49,19 @@ if __name__ == "__main__":
     parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
     parser.add_argument("--image-caption-epochs", type=int, default=0, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--resume-from", type=str, default=None, help="Resume training from checkpoint")
     args = parser.parse_args()
 
     
-    tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
-
+    tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+    tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})
+    tokenizer._tokenizer.post_processor = TemplateProcessing(
+    single=tokenizer.bos_token + " $A " + tokenizer.eos_token,
+    special_tokens=[(tokenizer.eos_token, tokenizer.eos_token_id), (tokenizer.bos_token, tokenizer.bos_token_id)],
+    )
     vocab_size = len(tokenizer)
 
     print("Loading DINO embeddings and captions...")

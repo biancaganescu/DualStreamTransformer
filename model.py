@@ -80,7 +80,7 @@ class DualStreamTransformer(nn.Module):
             image_encoded = self.image_encoder(image_embedded)
         
         with torch.no_grad():
-            for _ in range(max_len):
+            for i in range(max_len):
                 # Get embeddings for current sequence
                 logits = self.forward(
                 input_ids=generated,
@@ -104,7 +104,7 @@ class DualStreamTransformer(nn.Module):
                     topk_values, topk_indices = torch.topk(probs, 10, dim=-1)
                     top_tokens = tokenizer.convert_ids_to_tokens(topk_indices[0].tolist())
                     top_probs = topk_values[0].tolist()
-                    print(f"Step {_ + 1}: Top 10 predictions:")
+                    print("\nToken ", i)
                     for token, prob in zip(top_tokens, top_probs):
                         print(f"  {token}: {prob:.4f}")
                 
@@ -115,7 +115,7 @@ class DualStreamTransformer(nn.Module):
                 generated = torch.cat([generated, next_token], dim=1)
                 
                 # Stop if end token is generated for all sequences
-                if tokenizer is not None and (next_token == tokenizer.sep_token_id).all():
+                if tokenizer is not None and (next_token == tokenizer.eos_token).all():
                     break
         
         self.train()  # Restore training mode
@@ -197,7 +197,7 @@ class MultimodalDecoderLayer(nn.Module):
         # Self Attention
         self.self_attn = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
         # Cross Attention with Image
-        self.cross_attn_image = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
+        self.cross_attn_txt_image = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -216,24 +216,28 @@ class MultimodalDecoderLayer(nn.Module):
             nn.Linear(d_hid, d_model),
             nn.Dropout(dropout))
 
+    # Implemented with Pre-LN
     def forward(self, tgt, image_memory, tgt_mask=None, tgt_key_padding_mask=None):
         # 1. Masked Self-Attention (causal)
-        self_attn_output, _ = self.self_attn(tgt, tgt, tgt, key_padding_mask=tgt_key_padding_mask, attn_mask=tgt_mask, is_causal=True)
+        tgt_norm = self.norm1(tgt)
+        self_attn_output, _ = self.self_attn(tgt_norm, tgt_norm, tgt_norm, key_padding_mask=tgt_key_padding_mask, attn_mask=tgt_mask, is_causal=True)
     
-        tgt = self.norm1(tgt + self.dropout(self_attn_output))
+        tgt = tgt + self.dropout(self_attn_output)
 
         # 2. Cross-Attention to image + Gated Fusion
         if image_memory is not None:
-            image_attn_output, _ = self.cross_attn_image(tgt, image_memory, image_memory)
-            image_attn_output = self.dropout(image_attn_output)
+            tgt_norm = self.norm2(tgt)
+            cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
+            cross_attn_output = self.dropout(cross_attn_output)
 
-            fused = self.gate(tgt, image_attn_output)
-            tgt = self.norm2(tgt + fused)  
+            fused = self.gate(tgt_norm, cross_attn_output)
+            tgt = tgt + fused 
 
 
         # 3. Feedforward 
-        ff_output = self.ff(tgt)
-        tgt = self.norm3(tgt + self.dropout(ff_output))
+        tgt_norm = self.norm3(tgt)
+        ff_output = self.ff(tgt_norm)
+        tgt = tgt + self.dropout(ff_output)
 
         return tgt
 
