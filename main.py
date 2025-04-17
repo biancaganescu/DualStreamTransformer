@@ -9,8 +9,9 @@ from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
 from tokenizers.processors import TemplateProcessing
+import json
 
-def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42):
+def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
     text_dataset = TextOnlyDataset(text_only_data, tokenizer)
     image_dataset = DINOCaptionDataset(dino_embeddings, captions, tokenizer)
 
@@ -23,8 +24,49 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
     image_val_size = int(len(image_dataset) * val_split)
     image_test_size = len(image_dataset) - image_train_size - image_val_size
 
-    text_train, text_val, text_test = random_split(text_dataset, [text_train_size, text_val_size, text_test_size])
-    image_train, image_val, image_test = random_split(image_dataset, [image_train_size, image_val_size, image_test_size])
+    if indices_file and torch.cuda.is_available():
+        try:
+            with open(indices_file, 'r') as f:
+                indices = json.load(f)
+            
+            # Create splits using loaded indices
+            text_train = torch.utils.data.Subset(text_dataset, indices['text_train'])
+            text_val = torch.utils.data.Subset(text_dataset, indices['text_val'])
+            text_test = torch.utils.data.Subset(text_dataset, indices['text_test'])
+            
+            image_train = torch.utils.data.Subset(image_dataset, indices['image_train'])
+            image_val = torch.utils.data.Subset(image_dataset, indices['image_val'])
+            image_test = torch.utils.data.Subset(image_dataset, indices['image_test'])
+        except FileNotFoundError:
+            print(f"Indices file {indices_file} not found. Creating new splits.")
+            indices = None
+    else:
+        indices = None
+
+    if indices is None:
+        # Create new splits
+        text_train, text_val, text_test = random_split(
+            text_dataset, [text_train_size, text_val_size, text_test_size],
+            generator=torch.Generator().manual_seed(seed)
+        )
+        image_train, image_val, image_test = random_split(
+            image_dataset, [image_train_size, image_val_size, image_test_size],
+            generator=torch.Generator().manual_seed(seed)
+        )
+
+        # Save indices if requested
+        if save_indices and indices_file:
+            indices = {
+                'text_train': text_train.indices,
+                'text_val': text_val.indices,
+                'text_test': text_test.indices,
+                'image_train': image_train.indices,
+                'image_val': image_val.indices,
+                'image_test': image_test.indices
+            }
+            with open(indices_file, 'w') as f:
+                json.dump(indices, f)
+            print(f"Saved split indices to {indices_file}")
 
     text_train_loader = DataLoader(text_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     text_val_loader = DataLoader(text_val, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -42,20 +84,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DualStreamTransformer")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--warmup-steps", type=int, default=12000, help="Warmup steps")
+    parser.add_argument("--warmup-steps", type=int, default=23000, help="Warmup steps")
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
-    parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs (text-only + image-caption)")
-    parser.add_argument("--total-steps", type=int, default=1107015, help="Total training steps")
+    parser.add_argument("--max-epochs", type=int, default=20, help="Total epochs (text-only + image-caption)")
+    parser.add_argument("--total-steps", type=int, default=2214030, help="Total training steps")
     parser.add_argument("--eval-steps", type=int, default=50000, help="Eval steps")
     parser.add_argument("--checkpoint-steps", type=int, default=50000, help="Checkpoint steps")
-    parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
-    parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
+    parser.add_argument("--text-only-epochs", type=int, default=10, help="Epochs to train on text-only data")
+    parser.add_argument("--image-caption-epochs", type=int, default=10, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
     parser.add_argument("--n-head", type=int, default=12, help="Number of attention heads")
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
-    parser.add_argument("--num-encoder-layers", type=int, default=4, help="Number of image encoder layers")
-    parser.add_argument("--num-decoder-layers", type=int, default=6, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints/medium_size", help="Checkpoint directory")
+    parser.add_argument("--num-encoder-layers", type=int, default=6, help="Number of image encoder layers")
+    parser.add_argument("--num-decoder-layers", type=int, default=12, help="Number of decoder layers")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/medium_size", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")

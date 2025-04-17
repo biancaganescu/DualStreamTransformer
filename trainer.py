@@ -222,6 +222,7 @@ class Trainer:
             # if (self.global_step >= self.total_steps or 
             #     (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
             #     break
+            torch.cuda.empty_cache()
 
         # Final evaluation on test set using the appropriate loader.
         if not train_use_image and self.text_test_loader is not None:
@@ -262,7 +263,6 @@ class Trainer:
         return avg_loss, metrics
 
 
-
     def save_checkpoint(self, epoch, is_best=False):
         checkpoint = {
             "epoch": epoch,
@@ -272,6 +272,16 @@ class Trainer:
             "scheduler_state_dict": self.scheduler.state_dict(),
             "scaler_state_dict": self.scaler.state_dict(),
             "best_val_loss": self.best_val_loss,
+            "model_args": {
+                "vocab_size": self.model.vocab_size,
+                "d_model": self.model.d_model,
+                "n_head": self.model.n_head,
+                "d_hid": self.model.d_hid,
+                "num_encoder_layers": self.model.num_encoder_layers,
+                "num_decoder_layers": self.model.num_decoder_layers,
+                "dino_dim": self.model.dino_dim,
+                "dropout": self.model.dropout
+            }
         }
         ckpt_path = os.path.join(self.checkpoint_dir, f"checkpoint_{self.global_step}.pt")
         torch.save(checkpoint, ckpt_path)

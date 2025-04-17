@@ -19,7 +19,14 @@ class DualStreamTransformer(nn.Module):
     ):
 
         super().__init__()
+        self.vocab_size = vocab_size
         self.d_model = d_model
+        self.n_head = n_head
+        self.d_hid = d_hid
+        self.num_encoder_layers = num_encoder_layers
+        self.num_decoder_layers = num_decoder_layers
+        self.dino_dim = dino_dim
+        self.dropout = dropout
 
         # Embedding layers
         self.text_embedding = SimpleTextEmbedding(vocab_size, d_model)
@@ -34,6 +41,7 @@ class DualStreamTransformer(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(d_model, vocab_size)
 
+        
 
     def forward(
         self,
