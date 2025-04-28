@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from torchvision.ops import SqueezeExcitation
 
 
 class DualStreamTransformer(nn.Module):
@@ -170,14 +171,14 @@ class Encoder(nn.Module):
         super().__init__()
         encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, d_hid, dropout, activation="gelu", batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
-        self.se = nn.SqueezeExcitation(d_model, d_model // 16) # reduction factor is 16 
+        self.se = SqueezeExcitation(d_model, d_model // 16) # reduction factor is 16 
 
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
         output = self.encoder(src, src_mask, src_key_padding_mask)
-        output = output.permute(0, 2, 1)  # (batch, d_model, seq_len)
+        output = output.permute(0, 2, 1).unsqueeze(2)  # (batch, d_model, 1, seq_len)
         output = self.se(output)
-        output = output.permute(0, 2, 1)  # (batch, seq_len, d_model)
+        output = output.squeeze(2).permute(0, 2, 1)  # (batch, seq_len, d_model)
         return output
 
 

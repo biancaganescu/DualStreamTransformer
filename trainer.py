@@ -178,7 +178,7 @@ class Trainer:
         start_time = time.time()
         if not self.unified:
             for epoch in range(self.start_epoch, self.max_epochs):
-                if epoch < self.text_only_epochs:
+                if epoch > self.text_only_epochs:
                     loader = self.text_train_loader
                     train_use_image = False
                 else:
