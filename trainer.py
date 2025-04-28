@@ -19,12 +19,16 @@ class Trainer:
     def __init__(
         self,
         model,
-        text_train_loader,
-        image_caption_train_loader,
+        text_train_loader=None,
+        image_caption_train_loader=None,
         text_val_loader=None,
         image_caption_val_loader=None,
         text_test_loader=None,
         image_caption_test_loader=None,
+        unified=False,
+        unified_train_loader=None,
+        unified_val_loader=None,
+        unified_test_loader=None,
         lr=1e-5,
         warmup_steps=1000,
         weight_decay=0.01,
@@ -51,6 +55,12 @@ class Trainer:
 
         self.text_test_loader = text_test_loader
         self.image_caption_test_loader = image_caption_test_loader
+
+        self.unified = unified
+        if unified:
+            self.unified_train_loader = unified_train_loader
+            self.unified_val_loader = unified_val_loader
+            self.unified_test_loader = unified_test_loader
 
         self.device = device
         self.model.to(device)
@@ -85,10 +95,12 @@ class Trainer:
 
         self._setup_wandb(wandb_project, wandb_run_name, wandb_config)
 
+        self.start_epoch = 0
         # logs
         self.global_step = 0
         self.best_val_loss = float("inf")
         self.patience_counter = 0
+
 
     def _setup_wandb(self, project, run_name, config):
         if run_name is None:
@@ -164,37 +176,97 @@ class Trainer:
     
     def train(self):
         start_time = time.time()
-        for epoch in range(self.max_epochs):
-            if epoch % 2 == 0:
-                loader = self.text_train_loader
-                train_use_image = False
-            else:
-                loader = self.image_caption_train_loader
-                train_use_image = True
+        if not self.unified:
+            for epoch in range(self.start_epoch, self.max_epochs):
+                if epoch < self.text_only_epochs:
+                    loader = self.text_train_loader
+                    train_use_image = False
+                else:
+                    loader = self.image_caption_train_loader
+                    train_use_image = True
 
-            epoch_loss = 0.0
-            progress_bar = tqdm(loader, desc=f"Epoch {epoch+1}/{self.max_epochs}")
-            for batch in progress_bar:
-                loss = self.train_step(batch, use_image=train_use_image)
-                epoch_loss += loss
-                self.global_step += 1
+                epoch_loss = 0.0
+                progress_bar = tqdm(loader, desc=f"Epoch {epoch+1}/{self.max_epochs}")
+                for batch in progress_bar:
+                    loss = self.train_step(batch, use_image=train_use_image)
+                    epoch_loss += loss
+                    self.global_step += 1
 
-                wandb.log({
-                    "train/loss": loss,
-                    "train/learning_rate": self.optimizer.param_groups[0]["lr"],
-                    "global_step": self.global_step
-                }, step=self.global_step)
-                progress_bar.set_postfix(loss=loss, lr=self.optimizer.param_groups[0]["lr"])
+                    wandb.log({
+                        "train/loss": loss,
+                        "train/learning_rate": self.optimizer.param_groups[0]["lr"],
+                        "global_step": self.global_step
+                    }, step=self.global_step)
+                    progress_bar.set_postfix(loss=loss, lr=self.optimizer.param_groups[0]["lr"])
 
-                if self.global_step % self.eval_steps == 0:
-                    if not train_use_image and self.text_val_loader is not None:
+                    if self.global_step % self.eval_steps == 0:
+                        if not train_use_image and self.text_val_loader is not None:
+                            val_loss, val_metrics = self.evaluate_loader(
+                                self.text_val_loader, use_image=False, prefix="val/text"
+                            )
+                        elif train_use_image and self.image_caption_val_loader is not None:
+                            val_loss, val_metrics = self.evaluate_loader(
+                                self.image_caption_val_loader, use_image=True, prefix="val/image_caption"
+                            )
+                        else:
+                            val_loss = None
+
+                        if val_loss is not None:
+                            if val_loss < self.best_val_loss:
+                                self.best_val_loss = val_loss
+                                self.patience_counter = 0
+                                self.save_checkpoint(epoch, is_best=True)
+                            else:
+                                self.patience_counter += 1
+
+                            # if (self.early_stopping_patience > 0 and 
+                            #     self.patience_counter >= self.early_stopping_patience):
+                            #     print(f"Early stopping triggered at step {self.global_step}")
+                            #     break
+
+                    if self.global_step % self.checkpoint_steps == 0:
+                        self.save_checkpoint(epoch)
+                    # if self.global_step >= self.total_steps:
+                    #     break
+
+                epoch_loss /= len(loader)
+                wandb.log({"train/epoch_loss": epoch_loss, "epoch": epoch}, step=self.global_step)
+                print(f"Epoch {epoch+1} Loss: {epoch_loss:.4f}")
+                # if (self.global_step >= self.total_steps or 
+                #     (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
+                #     break
+                torch.cuda.empty_cache()
+
+            # Final evaluation on test set using the appropriate loader.
+            if not train_use_image and self.text_test_loader is not None:
+                self.evaluate_loader(self.text_test_loader, use_image=False, prefix="test/text")
+            elif train_use_image and self.image_caption_test_loader is not None:
+                self.evaluate_loader(self.image_caption_test_loader, use_image=True, prefix="test/image_caption")
+            self.save_checkpoint(epoch=self.max_epochs - 1, is_best=False)
+            total_time = time.time() - start_time
+            print(f"Training completed in {total_time:.2f}s")
+            wandb.finish()
+        else:
+            for epoch in range(self.start_epoch, self.max_epochs):
+                loader = self.unified_train_loader
+                epoch_loss = 0.0
+                progress_bar = tqdm(loader, desc=f"Epoch {epoch+1}/{self.max_epochs}")
+                for batch in progress_bar:
+                    loss = self.train_step(batch, use_image=True)
+                    epoch_loss += loss
+                    self.global_step += 1
+
+                    wandb.log({
+                        "train/loss": loss,
+                        "train/learning_rate": self.optimizer.param_groups[0]["lr"],
+                        "global_step": self.global_step
+                    }, step=self.global_step)
+                    progress_bar.set_postfix(loss=loss, lr=self.optimizer.param_groups[0]["lr"])
+
+                    if self.global_step % self.eval_steps == 0:
                         val_loss, val_metrics = self.evaluate_loader(
-                            self.text_val_loader, use_image=False, prefix="val/text"
-                        )
-                    elif train_use_image and self.image_caption_val_loader is not None:
-                        val_loss, val_metrics = self.evaluate_loader(
-                            self.image_caption_val_loader, use_image=True, prefix="val/image_caption"
-                        )
+                                self.unified_val_loader, use_image=True, prefix="val/unified"
+                            )
                     else:
                         val_loss = None
 
@@ -206,33 +278,30 @@ class Trainer:
                         else:
                             self.patience_counter += 1
 
-                        # if (self.early_stopping_patience > 0 and 
-                        #     self.patience_counter >= self.early_stopping_patience):
-                        #     print(f"Early stopping triggered at step {self.global_step}")
-                        #     break
+                            # if (self.early_stopping_patience > 0 and 
+                            #     self.patience_counter >= self.early_stopping_patience):
+                            #     print(f"Early stopping triggered at step {self.global_step}")
+                            #     break
 
-                if self.global_step % self.checkpoint_steps == 0:
-                    self.save_checkpoint(epoch)
-                # if self.global_step >= self.total_steps:
+                    if self.global_step % self.checkpoint_steps == 0:
+                        self.save_checkpoint(epoch)
+                    # if self.global_step >= self.total_steps:
+                    #     break
+
+                epoch_loss /= len(loader)
+                wandb.log({"train/epoch_loss": epoch_loss, "epoch": epoch}, step=self.global_step)
+                print(f"Epoch {epoch+1} Loss: {epoch_loss:.4f}")
+                # if (self.global_step >= self.total_steps or 
+                #     (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
                 #     break
+                torch.cuda.empty_cache()
 
-            epoch_loss /= len(loader)
-            wandb.log({"train/epoch_loss": epoch_loss, "epoch": epoch}, step=self.global_step)
-            print(f"Epoch {epoch+1} Loss: {epoch_loss:.4f}")
-            # if (self.global_step >= self.total_steps or 
-            #     (self.early_stopping_patience > 0 and self.patience_counter >= self.early_stopping_patience)):
-            #     break
-            torch.cuda.empty_cache()
-
-        # Final evaluation on test set using the appropriate loader.
-        if not train_use_image and self.text_test_loader is not None:
-            self.evaluate_loader(self.text_test_loader, use_image=False, prefix="test/text")
-        elif train_use_image and self.image_caption_test_loader is not None:
-            self.evaluate_loader(self.image_caption_test_loader, use_image=True, prefix="test/image_caption")
-        self.save_checkpoint(epoch=self.max_epochs - 1, is_best=False)
-        total_time = time.time() - start_time
-        print(f"Training completed in {total_time:.2f}s")
-        wandb.finish()
+            # Final evaluation on test set using the appropriate loader.
+            self.evaluate_loader(self.unified_test_loader, use_image=True, prefix="test/text")
+            self.save_checkpoint(epoch=self.max_epochs - 1, is_best=False)
+            total_time = time.time() - start_time
+            print(f"Training completed in {total_time:.2f}s")
+            wandb.finish()
 
 
 
@@ -283,6 +352,7 @@ class Trainer:
                 "dropout": self.model.dropout
             }
         }
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
         ckpt_path = os.path.join(self.checkpoint_dir, f"checkpoint_{self.global_step}.pt")
         torch.save(checkpoint, ckpt_path)
         if is_best:
@@ -298,6 +368,7 @@ class Trainer:
         self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
         self.global_step = checkpoint.get("global_step", 0)
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+        self.start_epoch = checkpoint.get("epoch", 0)
         return checkpoint.get("epoch", 0)
     
     

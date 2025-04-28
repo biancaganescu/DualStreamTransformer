@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import math
 
 
@@ -171,9 +170,15 @@ class Encoder(nn.Module):
         super().__init__()
         encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, d_hid, dropout, activation="gelu", batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
+        self.se = nn.SqueezeExcitation(d_model, d_model // 16) # reduction factor is 16 
+
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        return self.encoder(src, src_mask, src_key_padding_mask)
+        output = self.encoder(src, src_mask, src_key_padding_mask)
+        output = output.permute(0, 2, 1)  # (batch, d_model, seq_len)
+        output = self.se(output)
+        output = output.permute(0, 2, 1)  # (batch, seq_len, d_model)
+        return output
 
 
 class DynamicGating(nn.Module):
@@ -223,6 +228,7 @@ class MultimodalDecoderLayer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_hid, d_model),
             nn.Dropout(dropout))
+        
 
     # Implemented with Pre-LN
     def forward(self, tgt, image_memory, tgt_mask=None, tgt_key_padding_mask=None):

@@ -4,7 +4,7 @@ import argparse
 import datetime
 from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
-from model import DualStreamTransformer
+from models.model_SE import DualStreamTransformer
 from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
@@ -97,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
     parser.add_argument("--num-encoder-layers", type=int, default=5, help="Number of image encoder layers")
     parser.add_argument("--num-decoder-layers", type=int, default=8, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/medium_size", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/SE", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")

@@ -66,3 +66,75 @@ class DINOCaptionDataset(Dataset):
             "text_mask": text_mask,
             "dino_embedding": dino_embedding,
         }
+
+class UnifiedDataset(Dataset):
+    def __init__(self, text_data=None, dino_embeddings=None, captions=None, tokenizer=None, sequence_length=128, dino_dim=768):
+        # Initialize lists if None
+        self.text_data = text_data if text_data is not None else []
+        self.dino_embeddings = dino_embeddings if dino_embeddings is not None else []
+        self.captions = captions if captions is not None else []
+        self.dino_dim = dino_dim
+        
+        # Validate DINO embeddings and captions match
+        if len(self.dino_embeddings) != len(self.captions):
+            raise ValueError(
+                f"Mismatch: {len(self.dino_embeddings)} DINO embeddings vs {len(self.captions)} captions"
+            )
+        
+        # Ensure tokenizer is provided
+        if tokenizer is None:
+            raise ValueError("Tokenizer must be provided")
+        
+        self.tokenizer = tokenizer
+        self.sequence_length = sequence_length
+        
+        # Create a unified list of indices and types
+        self.data = []
+        # Add text-only data
+        for i in range(len(self.text_data)):
+            self.data.append(('text', i))
+        # Add DINO-caption data
+        for i in range(len(self.captions)):
+            self.data.append(('dino', i))
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        data_type, data_idx = self.data[idx]
+        
+        if data_type == 'text':
+            # Handle text-only data
+            text = self.text_data[data_idx]
+            encoding = self.tokenizer(
+                text,
+                truncation=True,
+                max_length=self.sequence_length,
+                padding='max_length',
+                return_tensors="pt",
+                add_special_tokens=True
+            )
+            return {
+                "text_input": encoding['input_ids'].squeeze(0),
+                "text_mask": encoding['attention_mask'].squeeze(0),
+                "dino_embedding": torch.zeros(self.dino_dim, dtype=torch.float)
+            }
+        else:
+            # Handle DINO-caption data
+            caption = self.captions[data_idx]
+            dino_embedding = torch.tensor(self.dino_embeddings[data_idx], dtype=torch.float)
+            
+            encoding = self.tokenizer(
+                caption,
+                truncation=True,
+                max_length=self.sequence_length,
+                padding='max_length',
+                return_tensors="pt",
+                add_special_tokens=True
+            )
+            
+            return {
+                "text_input": encoding['input_ids'].squeeze(0),
+                "text_mask": encoding['attention_mask'].squeeze(0),
+                "dino_embedding": dino_embedding
+            }
