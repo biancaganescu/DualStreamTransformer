@@ -5,17 +5,16 @@ import datetime
 import sys
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-
 from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
-from models.model_SE import DualStreamTransformer
+from model import DualStreamTransformer
 from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
 from tokenizers.processors import TemplateProcessing
 import json
 
-def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
+def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices_ltg_bert_data.json", save_indices=True):
     text_dataset = TextOnlyDataset(text_only_data, tokenizer)
     image_dataset = DINOCaptionDataset(dino_embeddings, captions, tokenizer)
 
@@ -101,7 +100,7 @@ if __name__ == "__main__":
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
     parser.add_argument("--num-encoder-layers", type=int, default=5, help="Number of image encoder layers")
     parser.add_argument("--num-decoder-layers", type=int, default=8, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/SE", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/ltg_bert_data", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
@@ -121,7 +120,7 @@ if __name__ == "__main__":
     dino_embeddings, captions = load_and_concatenate_dino_data()
 
     print("Loading text-only data...")
-    text_only_data = load_and_concatenate_text_only_data("/home/bmg44/DualStreamTransformer/data/text_only/train_50M")
+    text_only_data = load_and_concatenate_text_only_data("/home/bmg44/DualStreamTransformer/data/text_only/processed_train_50M")
 
     (text_train_loader, text_val_loader, text_test_loader,
      image_caption_train_loader, image_caption_val_loader, image_caption_test_loader) = create_dataloaders(
