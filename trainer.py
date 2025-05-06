@@ -12,7 +12,7 @@ from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 import wandb
 from torch.utils.data import DataLoader
-
+import sys
 
 
 class Trainer:
@@ -178,7 +178,7 @@ class Trainer:
         start_time = time.time()
         if not self.unified:
             for epoch in range(self.start_epoch, self.max_epochs):
-                if epoch > self.text_only_epochs:
+                if epoch % 2 == 0:
                     loader = self.text_train_loader
                     train_use_image = False
                 else:
@@ -253,6 +253,8 @@ class Trainer:
                 progress_bar = tqdm(loader, desc=f"Epoch {epoch+1}/{self.max_epochs}")
                 for batch in progress_bar:
                     loss = self.train_step(batch, use_image=True)
+                    if loss is None:
+                        sys.exit(1)
                     epoch_loss += loss
                     self.global_step += 1
 
