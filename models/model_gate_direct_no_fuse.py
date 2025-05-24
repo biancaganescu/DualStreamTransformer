@@ -192,28 +192,14 @@ class DynamicGating(nn.Module):
 
         gate = torch.sigmoid(self.gate_fc(combined))
 
-        fused = gate * text_features + (1 - gate) * image_features
+        mask_hard = (gate > 0.5).float()
+        mask = mask_hard + (gate - gate.detach()) 
+        output = mask * text_features + (1 - mask) * image_features
 
-        fused = self.layer_norm(self.dropout(fused))
+        output = self.layer_norm(self.dropout(output))
 
-        return fused
+        return output
 
-
-class DyIntra(nn.Module):
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.modulation_gate = nn.Linear(d_model, d_model)
-
-    def forward(self, x, condition):
-        if condition is not None:
-            if condition.dim() == 2:
-                condition = condition.unsqueeze(1)
-            modulation = torch.sigmoid(self.modulation_gate(condition))
-            modulated_x = x * (1 + modulation)
-            return modulated_x
-        else: 
-            return x
-        
 
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
@@ -228,8 +214,6 @@ class MultimodalDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
 
         self.dropout = nn.Dropout(dropout)
-
-        self.dyIntra = DyIntra(d_model)
 
         # Gating + Fustion Module
         self.gate = DynamicGating(d_model, dropout)
@@ -256,9 +240,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            tgt_modulated = self.dyIntra(tgt_norm, image_memory)
-            
-            fused = self.gate(tgt_modulated, cross_attn_output)
+            fused = self.gate(tgt_norm, cross_attn_output)
             tgt = tgt + fused 
 
 

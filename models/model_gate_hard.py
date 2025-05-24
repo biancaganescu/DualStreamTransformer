@@ -48,7 +48,8 @@ class DualStreamTransformer(nn.Module):
         input_ids,
         dino_embedding=None,
         padding_mask=None,
-        use_image: bool = False
+        use_image: bool = False,
+        return_gates: bool = False
     ):
 
         # Text Embedding
@@ -67,9 +68,13 @@ class DualStreamTransformer(nn.Module):
         tgt_mask = self.decoder.generate_square_subsequent_mask(seq_len).to(embedded.device)
 
         # Decoder pass
-        decoder_output = self.decoder(tgt=embedded, image_memory=image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask)
+        decoder_output, gate_tensor = self.decoder(tgt=embedded, image_memory=image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask)
 
         output = self.output_layer(decoder_output)
+
+        if return_gates:
+            # gate_tensor: (num_layers, B, T)
+            return output, gate_tensor
 
         return output
 
@@ -215,9 +220,11 @@ class DynamicGating(nn.Module):
         gate = F.gumbel_softmax(logits, tau=self.temperature, hard=hard, dim=-1)
         gate = gate[..., 0]
 
+        gate_scalar = gate.mean(-1)
+
         fused = gate * text_features + (1 - gate) * image_features
         fused = self.layer_norm(self.dropout(fused))
-        return fused
+        return fused, gate_scalar
 
 
 class MultimodalDecoderLayer(nn.Module):
@@ -259,7 +266,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            fused = self.gate(tgt_norm, cross_attn_output)
+            fused, gate_scalar = self.gate(tgt_norm, cross_attn_output)
             tgt = tgt + fused 
 
 
@@ -268,7 +275,7 @@ class MultimodalDecoderLayer(nn.Module):
         ff_output = self.ff(tgt_norm)
         tgt = tgt + self.dropout(ff_output)
 
-        return tgt
+        return tgt, gate_scalar
 
     
 class MultimodalDecoder(nn.Module):
@@ -286,6 +293,12 @@ class MultimodalDecoder(nn.Module):
 
     def forward(self, tgt, image_memory, tgt_mask,  tgt_key_padding_mask=None):
         output = tgt
+        all_gates = []
         for layer in self.layers:
-            output = layer(output, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
-        return output
+            output, gate_scalar = layer(output, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
+            all_gates.append(gate_scalar)
+        
+        
+        all_gates = torch.stack(all_gates, dim=0)
+
+        return output, all_gates

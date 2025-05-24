@@ -206,10 +206,10 @@ class FiLM(nn.Module):
         self.beta_fc = nn.Linear(condition_dim, d_model)
 
     def forward(self, x, condition):
-        gamma = self.gamma_fc(condition).unqueeze(1)
-        beta = self.beta_fc(condition).unsqueeze(1)
+        gamma = self.gamma_fc(condition)
+        beta = self.beta_fc(condition)
         return x * gamma + beta
-
+    
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
         super().__init__()

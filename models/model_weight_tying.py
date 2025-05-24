@@ -41,7 +41,7 @@ class DualStreamTransformer(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(d_model, vocab_size)
 
-        
+        self.output_layer.weight = self.text_embedding.token_embedding.weight
 
     def forward(
         self,
@@ -239,7 +239,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output = self.dropout(cross_attn_output)
 
             fused = self.gate(tgt_norm, cross_attn_output)
-            tgt = fused 
+            tgt = tgt + fused 
 
 
         # 3. Feedforward 

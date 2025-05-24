@@ -57,7 +57,7 @@ class DualStreamTransformer(nn.Module):
         # Image Embedding + Encoding (if use_image)
         if use_image and dino_embedding is not None and not torch.all(dino_embedding == 0):
             image_embedded = self.image_embedding(dino_embedding)
-            image_encoded = self.image_encoder(image_embedded)
+            image_encoded = self.image_encoder(image_embedded, text_memory=embedded, text_key_padding_mask=padding_mask)
         else:
             image_encoded = None
 
@@ -171,8 +171,18 @@ class Encoder(nn.Module):
         super().__init__()
         encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, d_hid, dropout, activation="gelu", batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
+        self.dyIntra = DyIntra(d_model)
+        self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, text_memory=None, text_key_padding_mask=None):
+        if text_memory is not None:
+            if text_key_padding_mask is not None:
+                masked_text = text_memory.masked_fill(text_key_padding_mask.unsqueeze(-1), 0)
+                text_pooled = masked_text.sum(dim=1) / (~text_key_padding_mask).sum(dim=1, keepdim=True)
+            else:
+                text_pooled = text_memory.mean(dim=1)
+                src = self.dyIntra(src, text_pooled)
+
         return self.encoder(src, src_mask, src_key_padding_mask)
 
 
@@ -183,16 +193,16 @@ class DynamicGating(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model)
 
-    def forward(self, text_features, image_features):
+    def forward(self, text_features, fused_features):
 
-        if image_features is None:
+        if fused_features is None:
             return text_features
 
-        combined = torch.cat([text_features, image_features], dim=-1)
+        combined = torch.cat([text_features, fused_features], dim=-1)
 
         gate = torch.sigmoid(self.gate_fc(combined))
 
-        fused = gate * text_features + (1 - gate) * image_features
+        fused = gate * text_features + (1 - gate) * fused_features
 
         fused = self.layer_norm(self.dropout(fused))
 
@@ -206,14 +216,12 @@ class DyIntra(nn.Module):
 
     def forward(self, x, condition):
         if condition is not None:
-            if condition.dim() == 2:
-                condition = condition.unsqueeze(1)
-            modulation = torch.sigmoid(self.modulation_gate(condition))
+            condition_avg_pool = condition.mean(dim=1, keepdim=True)
+            modulation = torch.sigmoid(self.modulation_gate(condition_avg_pool))
             modulated_x = x * (1 + modulation)
             return modulated_x
         else: 
             return x
-        
 
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
@@ -228,8 +236,6 @@ class MultimodalDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
 
         self.dropout = nn.Dropout(dropout)
-
-        self.dyIntra = DyIntra(d_model)
 
         # Gating + Fustion Module
         self.gate = DynamicGating(d_model, dropout)
@@ -256,9 +262,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            tgt_modulated = self.dyIntra(tgt_norm, image_memory)
-            
-            fused = self.gate(tgt_modulated, cross_attn_output)
+            fused = self.gate(tgt_norm, cross_attn_output)
             tgt = tgt + fused 
 
 

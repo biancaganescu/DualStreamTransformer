@@ -15,6 +15,18 @@ from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only
 from tokenizers.processors import TemplateProcessing
 import json
 
+import random
+import numpy as np
+
+def set_global_seed(seed, deterministic=False):
+     random.seed(seed)
+     np.random.seed(seed)
+     torch.manual_seed(seed)
+     torch.cuda.manual_seed_all(seed)
+     if deterministic:
+         torch.backends.cudnn.deterministic = True
+         torch.backends.cudnn.benchmark = False
+
 def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
     text_dataset = TextOnlyDataset(text_only_data, tokenizer)
     image_dataset = DINOCaptionDataset(dino_embeddings, captions, tokenizer)
@@ -108,7 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume-from", type=str, default=None, help="Resume training from checkpoint")
     args = parser.parse_args()
 
-    
+    set_global_seed(42)    
     tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
     tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})
     tokenizer._tokenizer.post_processor = TemplateProcessing(

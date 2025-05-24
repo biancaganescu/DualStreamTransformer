@@ -6,8 +6,8 @@ import sys
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
 from torch.utils.data import DataLoader, random_split
-from datasets_def import TextOnlyDataset, DINOCaptionDataset
-from models.model_gate_direct_no_fuse import DualStreamTransformer
+from datasets_def import TextOnlyDataset, DINOCaptionDataset, UnifiedDataset
+from models.model_weight_tying import DualStreamTransformer
 from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
@@ -26,19 +26,21 @@ def set_global_seed(seed, deterministic=False):
          torch.backends.cudnn.deterministic = True
          torch.backends.cudnn.benchmark = False
 
+def create_unified_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/unified_wt_indices.json", save_indices=True):
+    # Create unified dataset
+    dataset = UnifiedDataset(
+        text_data=text_only_data,
+        dino_embeddings=dino_embeddings,
+        captions=captions,
+        tokenizer=tokenizer,
+        sequence_length=128
+    )
 
-def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
-    text_dataset = TextOnlyDataset(text_only_data, tokenizer)
-    image_dataset = DINOCaptionDataset(dino_embeddings, captions, tokenizer)
-
+    # Calculate split sizes
     train_split, val_split = 0.8, 0.1
-    text_train_size = int(len(text_dataset) * train_split)
-    text_val_size = int(len(text_dataset) * val_split)
-    text_test_size = len(text_dataset) - text_train_size - text_val_size
-
-    image_train_size = int(len(image_dataset) * train_split)
-    image_val_size = int(len(image_dataset) * val_split)
-    image_test_size = len(image_dataset) - image_train_size - image_val_size
+    train_size = int(len(dataset) * train_split)
+    val_size = int(len(dataset) * val_split)
+    test_size = len(dataset) - train_size - val_size
 
     if indices_file and torch.cuda.is_available():
         try:
@@ -46,13 +48,9 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
                 indices = json.load(f)
             
             # Create splits using loaded indices
-            text_train = torch.utils.data.Subset(text_dataset, indices['text_train'])
-            text_val = torch.utils.data.Subset(text_dataset, indices['text_val'])
-            text_test = torch.utils.data.Subset(text_dataset, indices['text_test'])
-            
-            image_train = torch.utils.data.Subset(image_dataset, indices['image_train'])
-            image_val = torch.utils.data.Subset(image_dataset, indices['image_val'])
-            image_test = torch.utils.data.Subset(image_dataset, indices['image_test'])
+            train_dataset = torch.utils.data.Subset(dataset, indices['train'])
+            val_dataset = torch.utils.data.Subset(dataset, indices['val'])
+            test_dataset = torch.utils.data.Subset(dataset, indices['test'])
         except FileNotFoundError:
             print(f"Indices file {indices_file} not found. Creating new splits.")
             indices = None
@@ -61,59 +59,63 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
 
     if indices is None:
         # Create new splits
-        text_train, text_val, text_test = random_split(
-            text_dataset, [text_train_size, text_val_size, text_test_size],
-            generator=torch.Generator().manual_seed(seed)
-        )
-        image_train, image_val, image_test = random_split(
-            image_dataset, [image_train_size, image_val_size, image_test_size],
+        train_dataset, val_dataset, test_dataset = random_split(
+            dataset,
+            [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(seed)
         )
 
         # Save indices if requested
         if save_indices and indices_file:
             indices = {
-                'text_train': text_train.indices,
-                'text_val': text_val.indices,
-                'text_test': text_test.indices,
-                'image_train': image_train.indices,
-                'image_val': image_val.indices,
-                'image_test': image_test.indices
+                'train': train_dataset.indices,
+                'val': val_dataset.indices,
+                'test': test_dataset.indices
             }
             with open(indices_file, 'w') as f:
                 json.dump(indices, f)
             print(f"Saved split indices to {indices_file}")
 
-    text_train_loader = DataLoader(text_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    text_val_loader = DataLoader(text_val, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    text_test_loader = DataLoader(text_test, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers
+    )
 
-
-    image_caption_train_loader = DataLoader(image_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    image_caption_val_loader = DataLoader(image_val, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    image_caption_test_loader = DataLoader(image_test, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-    return (text_train_loader, text_val_loader, text_test_loader,
-            image_caption_train_loader, image_caption_val_loader, image_caption_test_loader)
+    return train_loader, val_loader, test_loader
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DualStreamTransformer")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
-    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--warmup-steps", type=int, default=12000, help="Warmup steps")
     parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay")
-    parser.add_argument("--max-epochs", type=int, default=20, help="Total epochs (text-only + image-caption)")
+    parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs (text-only + image-caption)")
     parser.add_argument("--total-steps", type=int, default=1107020, help="Total training steps")
     parser.add_argument("--eval-steps", type=int, default=50000, help="Eval steps")
     parser.add_argument("--checkpoint-steps", type=int, default=50000, help="Checkpoint steps")
-    parser.add_argument("--text-only-epochs", type=int, default=10, help="Epochs to train on text-only data")
-    parser.add_argument("--image-caption-epochs", type=int, default=10, help="Epochs to train on image-caption data")
+    parser.add_argument("--text-only-epochs", type=int, default=5, help="Epochs to train on text-only data")
+    parser.add_argument("--image-caption-epochs", type=int, default=5, help="Epochs to train on image-caption data")
     parser.add_argument("--d-model", type=int, default=768, help="Model embedding dimension")
     parser.add_argument("--n-head", type=int, default=8, help="Number of attention heads")
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
     parser.add_argument("--num-encoder-layers", type=int, default=5, help="Number of image encoder layers")
     parser.add_argument("--num-decoder-layers", type=int, default=8, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/gate_direct", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/unified_weight_tying", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
@@ -129,26 +131,32 @@ if __name__ == "__main__":
     )
     vocab_size = len(tokenizer)
 
-
     print("Loading DINO embeddings and captions...")
     dino_embeddings, captions = load_and_concatenate_dino_data()
 
     print("Loading text-only data...")
     text_only_data = load_and_concatenate_text_only_data("/home/bmg44/DualStreamTransformer/data/text_only/train_50M")
 
-    (text_train_loader, text_val_loader, text_test_loader,
-     image_caption_train_loader, image_caption_val_loader, image_caption_test_loader) = create_dataloaders(
-         tokenizer=tokenizer,
+    # (text_train_loader, text_val_loader, text_test_loader,
+    #  image_caption_train_loader, image_caption_val_loader, image_caption_test_loader) = create_dataloaders(
+    #      tokenizer=tokenizer,
+    #      text_only_data=text_only_data,
+    #      dino_embeddings=dino_embeddings,
+    #      captions=captions,
+    #      batch_size=args.batch_size,
+    #      num_workers=4,
+    #      seed=42
+    # )
+    train_loader, val_loader, test_loader = create_unified_dataloaders( tokenizer=tokenizer,
          text_only_data=text_only_data,
          dino_embeddings=dino_embeddings,
          captions=captions,
          batch_size=args.batch_size,
          num_workers=4,
-         seed=42
-    )
+         seed=42)
 
 
-    print(f"Text-only Train samples: {len(text_train_loader.dataset)}")
+    # print(f"Text-only Train samples: {len(text_train_loader.dataset)}")
     # print(f"Image-caption Train samples: {len(image_caption_train_loader.dataset)}")
 
     print("Initializing DualStreamTransformer...")
@@ -177,12 +185,10 @@ if __name__ == "__main__":
 
     trainer = Trainer(
         model=model,
-        text_train_loader=text_train_loader,
-        image_caption_train_loader=image_caption_train_loader,
-        text_val_loader=text_val_loader,
-        image_caption_val_loader=image_caption_val_loader,
-        text_test_loader=text_test_loader,
-        image_caption_test_loader=image_caption_test_loader,
+        unified=True,
+        unified_train_loader=train_loader,
+        unified_val_loader=val_loader,
+        unified_test_loader=test_loader,
         lr=args.lr,
         weight_decay=args.weight_decay,
         total_steps=args.total_steps,

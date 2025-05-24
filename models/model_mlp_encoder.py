@@ -30,10 +30,7 @@ class DualStreamTransformer(nn.Module):
 
         # Embedding layers
         self.text_embedding = SimpleTextEmbedding(vocab_size, d_model)
-        self.image_embedding = DinoImageEmbedding(dino_dim, d_model)
-
-        # Image
-        self.image_encoder = Encoder(d_model, n_head, d_hid, num_encoder_layers, dropout)
+        self.image_embedding = DinoImageEmbedding(dino_dim, d_model, d_model)
 
         # Decoder
         self.decoder = MultimodalDecoder(d_model, n_head, d_hid, num_decoder_layers, dropout)
@@ -51,15 +48,15 @@ class DualStreamTransformer(nn.Module):
         use_image: bool = False
     ):
 
+
         # Text Embedding
         embedded = self.text_embedding(input_ids)
 
         # Image Embedding + Encoding (if use_image)
         if use_image and dino_embedding is not None and not torch.all(dino_embedding == 0):
             image_embedded = self.image_embedding(dino_embedding)
-            image_encoded = self.image_encoder(image_embedded)
         else:
-            image_encoded = None
+            image_embedded = None
 
         seq_len = embedded.size(1)
 
@@ -67,7 +64,7 @@ class DualStreamTransformer(nn.Module):
         tgt_mask = self.decoder.generate_square_subsequent_mask(seq_len).to(embedded.device)
 
         # Decoder pass
-        decoder_output = self.decoder(tgt=embedded, image_memory=image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask)
+        decoder_output = self.decoder(tgt=embedded, image_memory=image_embedded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask)
 
         output = self.output_layer(decoder_output)
 
@@ -156,14 +153,31 @@ class SimpleTextEmbedding(nn.Module):
         return self.layer_norm(embeddings)
 
 
-# Needs projection
 class DinoImageEmbedding(nn.Module):
-    def __init__(self, dino_dim, d_model):
+    def __init__(
+        self,
+        dino_dim: int,
+        d_model: int,
+        hidden_dim: int = None,
+        dropout: float = 0.1,
+    ):
         super().__init__()
-        self.projection_layer = nn.Linear(dino_dim, d_model)
+        hidden_dim = hidden_dim or d_model
+        self.proj = nn.Sequential(
+            nn.Linear(dino_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, d_model),
+        )
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
-        return self.projection_layer(x.unsqueeze(1))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [batch, dino_dim]
+        out = self.proj(x)            # → [batch, d_model]
+        out = self.dropout(out)
+        out = self.layer_norm(out)    # → [batch, d_model]
+        return out.unsqueeze(1)       # → [batch, 1, d_model]
 
 
 class Encoder(nn.Module):
@@ -199,22 +213,6 @@ class DynamicGating(nn.Module):
         return fused
 
 
-class DyIntra(nn.Module):
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.modulation_gate = nn.Linear(d_model, d_model)
-
-    def forward(self, x, condition):
-        if condition is not None:
-            if condition.dim() == 2:
-                condition = condition.unsqueeze(1)
-            modulation = torch.sigmoid(self.modulation_gate(condition))
-            modulated_x = x * (1 + modulation)
-            return modulated_x
-        else: 
-            return x
-        
-
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
         super().__init__()
@@ -228,8 +226,6 @@ class MultimodalDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
 
         self.dropout = nn.Dropout(dropout)
-
-        self.dyIntra = DyIntra(d_model)
 
         # Gating + Fustion Module
         self.gate = DynamicGating(d_model, dropout)
@@ -256,9 +252,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            tgt_modulated = self.dyIntra(tgt_norm, image_memory)
-            
-            fused = self.gate(tgt_modulated, cross_attn_output)
+            fused = self.gate(tgt_norm, cross_attn_output)
             tgt = tgt + fused 
 
 

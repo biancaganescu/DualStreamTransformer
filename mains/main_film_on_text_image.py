@@ -5,15 +5,15 @@ import datetime
 import sys
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
+
 from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
-from models.model_gate_direct_no_fuse import DualStreamTransformer
+from models.model_film_on_text_image import DualStreamTransformer
 from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
 from tokenizers.processors import TemplateProcessing
 import json
-
 import random
 import numpy as np
 
@@ -25,7 +25,6 @@ def set_global_seed(seed, deterministic=False):
      if deterministic:
          torch.backends.cudnn.deterministic = True
          torch.backends.cudnn.benchmark = False
-
 
 def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
     text_dataset = TextOnlyDataset(text_only_data, tokenizer)
@@ -113,7 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
     parser.add_argument("--num-encoder-layers", type=int, default=5, help="Number of image encoder layers")
     parser.add_argument("--num-decoder-layers", type=int, default=8, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/gate_direct", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/film_on_text_image", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
@@ -121,6 +120,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     set_global_seed(42)
+    
     tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
     tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})
     tokenizer._tokenizer.post_processor = TemplateProcessing(
@@ -128,7 +128,6 @@ if __name__ == "__main__":
     special_tokens=[(tokenizer.eos_token, tokenizer.eos_token_id), (tokenizer.bos_token, tokenizer.bos_token_id)],
     )
     vocab_size = len(tokenizer)
-
 
     print("Loading DINO embeddings and captions...")
     dino_embeddings, captions = load_and_concatenate_dino_data()

@@ -5,6 +5,17 @@ import datetime
 import sys
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
+import random
+import numpy as np
+
+def set_global_seed(seed, deterministic=False):
+     random.seed(seed)
+     np.random.seed(seed)
+     torch.manual_seed(seed)
+     torch.cuda.manual_seed_all(seed)
+     if deterministic:
+         torch.backends.cudnn.deterministic = True
+         torch.backends.cudnn.benchmark = False
 
 from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
@@ -108,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume-from", type=str, default=None, help="Resume training from checkpoint")
     args = parser.parse_args()
 
-    
+    set_global_seed(42)
     tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
     tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})
     tokenizer._tokenizer.post_processor = TemplateProcessing(

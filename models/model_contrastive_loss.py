@@ -41,14 +41,20 @@ class DualStreamTransformer(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(d_model, vocab_size)
 
-        
+        # For contrastive loss
+        self.image_projection = nn.Linear(d_model, d_model)
+        self.text_projection = nn.Linear(d_model, d_model)
+
+        self.log_tau = nn.Parameter(torch.log(torch.tensor(0.07)))
+
 
     def forward(
         self,
         input_ids,
         dino_embedding=None,
         padding_mask=None,
-        use_image: bool = False
+        use_image: bool = False,
+        return_pooled: bool = False 
     ):
 
         # Text Embedding
@@ -71,6 +77,29 @@ class DualStreamTransformer(nn.Module):
 
         output = self.output_layer(decoder_output)
 
+        # For contrastive loss
+        # if return_pooled:
+        #     if padding_mask is not None:
+        #         non_pad = (~padding_mask).unsqueeze(-1).float()
+        #         pooled = (decoder_output * non_pad).sum(dim=1)
+        #         counts = non_pad.sum(dim=1).clamp(min=1)
+        #         text_pooled = pooled / counts
+        #     else:
+        #         text_pooled = decoder_output.mean(dim=1)
+
+        #     text_pooled = self.text_projection(text_pooled)
+        #     image_pooled = self.image_projection(image_encoded.squeeze(1)) if image_encoded is not None else None
+
+        #     return output, text_pooled, image_pooled
+
+        if return_pooled:
+            text_unimodal = embedded.mean(dim=1)                
+            text_proj = self.text_projection(text_unimodal)
+
+            image_proj = self.image_projection(image_encoded.squeeze(1))
+
+            return output, text_proj, image_proj
+            
         return output
 
 
@@ -129,8 +158,19 @@ class DualStreamTransformer(nn.Module):
         self.train()  # Restore training mode
         return generated
 
+    def compute_contrastive_loss(self, text_features, image_features, batch_size):
+        tau = torch.exp(self.log_tau)
+        text_features = F.normalize(text_features, dim=-1)
+        image_features = F.normalize(image_features, dim=-1)
 
 
+        logits = torch.matmul(text_features, image_features.t()) / tau
+        labels = torch.arange(batch_size, device=logits.device)
+
+        loss_image_to_text = F.cross_entropy(logits, labels)
+        loss_text_to_image = F.cross_entropy(logits.t(), labels)
+
+        return (loss_image_to_text + loss_text_to_image) / 2
 
 class SimpleTextEmbedding(nn.Module):
     def __init__(self, vocab_size, d_model, max_len=128, dropout=0.1):
@@ -199,22 +239,6 @@ class DynamicGating(nn.Module):
         return fused
 
 
-class DyIntra(nn.Module):
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.modulation_gate = nn.Linear(d_model, d_model)
-
-    def forward(self, x, condition):
-        if condition is not None:
-            if condition.dim() == 2:
-                condition = condition.unsqueeze(1)
-            modulation = torch.sigmoid(self.modulation_gate(condition))
-            modulated_x = x * (1 + modulation)
-            return modulated_x
-        else: 
-            return x
-        
-
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
         super().__init__()
@@ -228,8 +252,6 @@ class MultimodalDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
 
         self.dropout = nn.Dropout(dropout)
-
-        self.dyIntra = DyIntra(d_model)
 
         # Gating + Fustion Module
         self.gate = DynamicGating(d_model, dropout)
@@ -256,9 +278,7 @@ class MultimodalDecoderLayer(nn.Module):
             cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            tgt_modulated = self.dyIntra(tgt_norm, image_memory)
-            
-            fused = self.gate(tgt_modulated, cross_attn_output)
+            fused = self.gate(tgt_norm, cross_attn_output)
             tgt = tgt + fused 
 
 

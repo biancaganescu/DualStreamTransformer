@@ -30,6 +30,7 @@ class DualStreamTransformer(nn.Module):
 
         # Embedding layers
         self.text_embedding = SimpleTextEmbedding(vocab_size, d_model)
+        
         self.image_embedding = DinoImageEmbedding(dino_dim, d_model)
 
         # Image
@@ -59,6 +60,7 @@ class DualStreamTransformer(nn.Module):
             image_embedded = self.image_embedding(dino_embedding)
             image_encoded = self.image_encoder(image_embedded, text_memory=embedded, text_key_padding_mask=padding_mask)
         else:
+            image_embedded=None
             image_encoded = None
 
         seq_len = embedded.size(1)
@@ -67,7 +69,7 @@ class DualStreamTransformer(nn.Module):
         tgt_mask = self.decoder.generate_square_subsequent_mask(seq_len).to(embedded.device)
 
         # Decoder pass
-        decoder_output = self.decoder(tgt=embedded, image_memory=image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask)
+        decoder_output = self.decoder(tgt=embedded, image_memory=image_encoded, tgt_mask=tgt_mask, tgt_key_padding_mask=padding_mask, og_image=image_embedded)
 
         output = self.output_layer(decoder_output)
 
@@ -181,9 +183,11 @@ class Encoder(nn.Module):
                 text_pooled = masked_text.sum(dim=1) / (~text_key_padding_mask).sum(dim=1, keepdim=True)
             else:
                 text_pooled = text_memory.mean(dim=1)
-                src = self.film(src, text_pooled)
+            
+            src = self.film(src, text_pooled)
 
-        return self.encoder(src, src_mask, src_key_padding_mask)
+        output = self.encoder(src, src_mask, src_key_padding_mask)
+        return output
 
 
 class DynamicGating(nn.Module):
@@ -216,9 +220,13 @@ class FiLM(nn.Module):
         self.beta_fc = nn.Linear(condition_dim, d_model)
 
     def forward(self, x, condition):
-        gamma = self.gamma_fc(condition).unqueeze(1)
-        beta = self.beta_fc(condition).unsqueeze(1)
-        return x * gamma + beta
+        gamma = self.gamma_fc(condition)
+        beta = self.beta_fc(condition)
+        if gamma.dim() == 2:  # [batch_size, d_model]
+            gamma = gamma.unsqueeze(1)  # [batch_size, 1, d_model]
+            beta = beta.unsqueeze(1)
+        output = x * gamma + beta
+        return output
 
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
@@ -248,7 +256,7 @@ class MultimodalDecoderLayer(nn.Module):
             nn.Dropout(dropout))
 
     # Implemented with Pre-LN
-    def forward(self, tgt, image_memory, tgt_mask=None, tgt_key_padding_mask=None):
+    def forward(self, tgt, image_memory, tgt_mask=None, tgt_key_padding_mask=None, og_image=None):
         # 1. Masked Self-Attention (causal)
         tgt_norm = self.norm1(tgt)
         self_attn_output, _ = self.self_attn(tgt_norm, tgt_norm, tgt_norm, key_padding_mask=tgt_key_padding_mask, attn_mask=tgt_mask, is_causal=True)
@@ -258,10 +266,11 @@ class MultimodalDecoderLayer(nn.Module):
         # 2. Cross-Attention to image + Gated Fusion
         if image_memory is not None:
             tgt_norm = self.norm2(tgt)
-            cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
+            image_pooled = og_image.mean(dim=1)
+            tgt_modulated = self.film(tgt_norm, image_pooled)
+            cross_attn_output, _ = self.cross_attn_txt_image(tgt_modulated, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
 
-            tgt_modulated = self.film(tgt_norm, image_memory)
             fused = self.gate(tgt_modulated, cross_attn_output)
             tgt = tgt + fused 
 
@@ -287,8 +296,8 @@ class MultimodalDecoder(nn.Module):
         return mask
 
 
-    def forward(self, tgt, image_memory, tgt_mask,  tgt_key_padding_mask=None):
+    def forward(self, tgt, image_memory, tgt_mask,  tgt_key_padding_mask=None, og_image=None):
         output = tgt
         for layer in self.layers:
-            output = layer(output, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
+            output = layer(output, image_memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask, og_image=og_image)
         return output

@@ -181,7 +181,8 @@ class Encoder(nn.Module):
                 text_pooled = masked_text.sum(dim=1) / (~text_key_padding_mask).sum(dim=1, keepdim=True)
             else:
                 text_pooled = text_memory.mean(dim=1)
-                src = self.film(src, text_pooled)
+            
+            src = self.film(src, text_pooled)
 
         return self.encoder(src, src_mask, src_key_padding_mask)
 
@@ -216,9 +217,13 @@ class FiLM(nn.Module):
         self.beta_fc = nn.Linear(condition_dim, d_model)
 
     def forward(self, x, condition):
-        gamma = self.gamma_fc(condition).unqueeze(1)
-        beta = self.beta_fc(condition).unsqueeze(1)
-        return x * gamma + beta
+        gamma = self.gamma_fc(condition)
+        beta = self.beta_fc(condition)
+        if gamma.dim() == 2:  # [batch_size, d_model]
+            gamma = gamma.unsqueeze(1)  # [batch_size, 1, d_model]
+            beta = beta.unsqueeze(1)
+        output = x * gamma + beta
+        return output
 
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):

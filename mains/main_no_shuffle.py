@@ -7,27 +7,18 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
 from torch.utils.data import DataLoader, random_split
 from datasets_def import TextOnlyDataset, DINOCaptionDataset
-from models.model_gate_direct_no_fuse import DualStreamTransformer
+from model import DualStreamTransformer
 from trainer import Trainer
 from transformers import AutoTokenizer
 from utils import load_and_concatenate_dino_data, load_and_concatenate_text_only_data
 from tokenizers.processors import TemplateProcessing
 import json
 
-import random
-import numpy as np
+import torch
+from torch.utils.data import DataLoader, Subset
+import json
 
-def set_global_seed(seed, deterministic=False):
-     random.seed(seed)
-     np.random.seed(seed)
-     torch.manual_seed(seed)
-     torch.cuda.manual_seed_all(seed)
-     if deterministic:
-         torch.backends.cudnn.deterministic = True
-         torch.backends.cudnn.benchmark = False
-
-
-def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices.json", save_indices=True):
+def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, batch_size=32, num_workers=4, seed=42, indices_file="./data/indices_sorted.json", save_indices=True):
     text_dataset = TextOnlyDataset(text_only_data, tokenizer)
     image_dataset = DINOCaptionDataset(dino_embeddings, captions, tokenizer)
 
@@ -70,6 +61,20 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
             generator=torch.Generator().manual_seed(seed)
         )
 
+        text_train_indices = sorted(text_train.indices)
+        text_val_indices = sorted(text_val.indices)
+        text_test_indices = sorted(text_test.indices)
+        image_train_indices = sorted(image_train.indices)
+        image_val_indices = sorted(image_val.indices)
+        image_test_indices = sorted(image_test.indices)
+
+        text_train = torch.utils.data.Subset(text_dataset, text_train_indices)
+        text_val = torch.utils.data.Subset(text_dataset, text_val_indices)
+        text_test = torch.utils.data.Subset(text_dataset, text_test_indices)
+        image_train = torch.utils.data.Subset(image_dataset, image_train_indices)
+        image_val = torch.utils.data.Subset(image_dataset, image_val_indices)
+        image_test = torch.utils.data.Subset(image_dataset, image_test_indices)
+
         # Save indices if requested
         if save_indices and indices_file:
             indices = {
@@ -84,12 +89,12 @@ def create_dataloaders(tokenizer, text_only_data, dino_embeddings, captions, bat
                 json.dump(indices, f)
             print(f"Saved split indices to {indices_file}")
 
-    text_train_loader = DataLoader(text_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    text_train_loader = DataLoader(text_train, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     text_val_loader = DataLoader(text_val, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     text_test_loader = DataLoader(text_test, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
-    image_caption_train_loader = DataLoader(image_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    image_caption_train_loader = DataLoader(image_train, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     image_caption_val_loader = DataLoader(image_val, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     image_caption_test_loader = DataLoader(image_test, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
@@ -113,14 +118,14 @@ if __name__ == "__main__":
     parser.add_argument("--d-hid", type=int, default=3072, help="Number of hidden dimensions")
     parser.add_argument("--num-encoder-layers", type=int, default=5, help="Number of image encoder layers")
     parser.add_argument("--num-decoder-layers", type=int, default=8, help="Number of decoder layers")
-    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/gate_direct", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", type=str, default="/local/scratch/bmg44/dual_stream_runs/checkpoints/no_shuffle", help="Checkpoint directory")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--clip-grad-norm", type=float, default=1.0, help="Gradient clipping norm")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout")
     parser.add_argument("--resume-from", type=str, default=None, help="Resume training from checkpoint")
     args = parser.parse_args()
 
-    set_global_seed(42)
+    
     tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
     tokenizer.add_special_tokens({'pad_token': '[PAD]', 'eos_token': '[EOS]', 'bos_token': '[BOS]'})
     tokenizer._tokenizer.post_processor = TemplateProcessing(
@@ -128,7 +133,6 @@ if __name__ == "__main__":
     special_tokens=[(tokenizer.eos_token, tokenizer.eos_token_id), (tokenizer.bos_token, tokenizer.bos_token_id)],
     )
     vocab_size = len(tokenizer)
-
 
     print("Loading DINO embeddings and captions...")
     dino_embeddings, captions = load_and_concatenate_dino_data()

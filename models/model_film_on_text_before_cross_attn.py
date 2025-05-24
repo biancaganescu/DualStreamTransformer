@@ -5,6 +5,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import math
 
 
+
 class DualStreamTransformer(nn.Module):
     def __init__(
         self,
@@ -199,21 +200,16 @@ class DynamicGating(nn.Module):
         return fused
 
 
-class DyIntra(nn.Module):
-    def __init__(self, d_model: int):
+class FiLM(nn.Module):
+    def __init__(self, d_model: int, condition_dim: int):
         super().__init__()
-        self.modulation_gate = nn.Linear(d_model, d_model)
+        self.gamma_fc = nn.Linear(condition_dim, d_model)
+        self.beta_fc = nn.Linear(condition_dim, d_model)
 
     def forward(self, x, condition):
-        if condition is not None:
-            if condition.dim() == 2:
-                condition = condition.unsqueeze(1)
-            modulation = torch.sigmoid(self.modulation_gate(condition))
-            modulated_x = x * (1 + modulation)
-            return modulated_x
-        else: 
-            return x
-        
+        gamma = self.gamma_fc(condition)
+        beta = self.beta_fc(condition)
+        return x * gamma + beta
 
 class MultimodalDecoderLayer(nn.Module):
     def __init__(self, d_model: int, n_head: int, d_hid: int, dropout: float = 0.1):
@@ -229,7 +225,7 @@ class MultimodalDecoderLayer(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-        self.dyIntra = DyIntra(d_model)
+        self.film = FiLM(d_model, d_model)
 
         # Gating + Fustion Module
         self.gate = DynamicGating(d_model, dropout)
@@ -253,10 +249,9 @@ class MultimodalDecoderLayer(nn.Module):
         # 2. Cross-Attention to image + Gated Fusion
         if image_memory is not None:
             tgt_norm = self.norm2(tgt)
-            cross_attn_output, _ = self.cross_attn_txt_image(tgt_norm, image_memory, image_memory)
+            tgt_modulated = self.film(tgt_norm, image_memory)
+            cross_attn_output, _ = self.cross_attn_txt_image(tgt_modulated, image_memory, image_memory)
             cross_attn_output = self.dropout(cross_attn_output)
-
-            tgt_modulated = self.dyIntra(tgt_norm, image_memory)
             
             fused = self.gate(tgt_modulated, cross_attn_output)
             tgt = tgt + fused 
